@@ -1,4 +1,6 @@
-# Tamagui + Solito + Next + Expo Monorepo
+# YACPAB: Yet Another Cross Platform App Builder
+
+## Tamagui + Solito + Next + Expo Monorepo
 
 ```sh
 npm create tamagui

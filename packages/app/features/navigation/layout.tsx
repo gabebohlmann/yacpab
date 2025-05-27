@@ -140,6 +140,16 @@ export const appNavigationStructure: NavigatorLayout[] = [
             component: FeedScreen,
             options: { title: 'Feed', tabBarIconName: 'feed' },
           },
+          {
+            name: 'about',
+            component: AboutScreen,
+            options: { title: 'About', tabBarIconName: 'about' },
+          },
+          {
+            name: 'menu',
+            component: MenuScreen,
+            options: { title: 'Menu', tabBarIconName: 'menu' },
+          },
         ],
       },
       // Example of another stack screen outside tabs

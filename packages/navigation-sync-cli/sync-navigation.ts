@@ -8,13 +8,10 @@ const simpleGit = require('simple-git')
 const ts = require('typescript')
 
 // Determine MONOREPO_ROOT
-// This assumes the CLI is run from the root of the monorepo.
-// If run via `yarn workspace <cli-pkg-name> <command>`, process.cwd() is typically the monorepo root.
 const MONOREPO_ROOT = process.cwd()
 console.log(`CLI operating with MONOREPO_ROOT: ${MONOREPO_ROOT}`)
 
-// const CWD = MONOREPO_ROOT; // CWD was an alias for MONOREPO_ROOT, can be removed for clarity if MONOREPO_ROOT is used directly.
-const git = simpleGit({ baseDir: MONOREPO_ROOT }) // Ensure git commands run against the monorepo root
+const git = simpleGit({ baseDir: MONOREPO_ROOT })
 
 const NAVIGATION_CONFIG_PATH = path.join(
   MONOREPO_ROOT,
@@ -26,7 +23,8 @@ const NEXT_APP_PATH = path.join(MONOREPO_ROOT, 'apps/next/app')
 
 let lastAcknowledgedConfigState = null
 let actionInProgress = false
-let ignoreNextConfigChange = false
+let ignoreNextConfigChange = false // This flag is set by addImportToNavigationConfig
+let aProgrammaticChangeJustHappened = false // New flag set by addImportToNavigationConfig
 
 function capitalizeFirstLetter(string) {
   return string.charAt(0).toUpperCase() + string.slice(1)
@@ -252,6 +250,7 @@ export default function ${capitalizeFirstLetter(screenName)}Page() {
 async function addImportToNavigationConfig(componentName, screenName) {
   const relativePath = `../${screenName}/screen`
   const importStatement = `import { ${componentName} } from '${relativePath}';\n`
+  aProgrammaticChangeJustHappened = false // Reset before attempting
 
   try {
     let content = await fs.readFile(NAVIGATION_CONFIG_PATH, 'utf-8')
@@ -274,19 +273,23 @@ async function addImportToNavigationConfig(componentName, screenName) {
     }
 
     ignoreNextConfigChange = true
+    aProgrammaticChangeJustHappened = true // Signal that a write is about to happen
     await fs.writeFile(NAVIGATION_CONFIG_PATH, content)
     console.log(
-      `Added import for ${componentName} to ${NAVIGATION_CONFIG_PATH}. Next change will be ignored.`
+      `Added import for ${componentName} to ${NAVIGATION_CONFIG_PATH}. Next direct change will be ignored.`
     )
+    // The delay here was an attempt to fix ordering, but a better fix is in the main loop
   } catch (error) {
     console.error(`Error adding import to ${NAVIGATION_CONFIG_PATH}:`, error)
     ignoreNextConfigChange = false
+    aProgrammaticChangeJustHappened = false
   }
 }
 
 async function onConfigFileChanged(changedPath) {
   if (changedPath === NAVIGATION_CONFIG_PATH && ignoreNextConfigChange) {
-    console.log('Change to navigation config was programmatic, ignoring this event.')
+    // TODO: Currently unable to print this because it comes up out of order after the next prompt
+    // console.log('Change to navigation config was programmatic, ignoring this event.')
     ignoreNextConfigChange = false
     return
   }
@@ -382,19 +385,18 @@ async function onConfigFileChanged(changedPath) {
 
     for (const screen of newScreens) {
       if (!screen.name || !screen.componentName || !(screen.title || screen.name)) {
-        // Ensure title or name exists for title generation
         console.warn(
           `Skipping screen due to missing critical data (name, componentName, or title): ${JSON.stringify(screen)}`
         )
         continue
       }
       console.log(`\nProcessing new screen: ${screen.name}`)
+      aProgrammaticChangeJustHappened = false // Reset for each screen's operations
 
       const operations = [
         {
           name: `Generate feature screen for ${screen.name}`,
           action: async () => {
-            // Ensure action is async and awaits
             const filePath = await generateFeatureScreen(
               screen.name,
               screen.componentName,
@@ -406,7 +408,6 @@ async function onConfigFileChanged(changedPath) {
         {
           name: `Generate Expo tab file for ${screen.name}`,
           action: async () => {
-            // Ensure action is async and awaits
             const filePath = await generateExpoTabFile(screen.name, screen.componentName)
             if (filePath) generatedFilePaths.push(filePath)
           },
@@ -414,7 +415,6 @@ async function onConfigFileChanged(changedPath) {
         {
           name: `Generate Next.js page file for ${screen.name}`,
           action: async () => {
-            // Ensure action is async and awaits
             const filePath = await generateNextPageFile(screen.name, screen.componentName)
             if (filePath) generatedFilePaths.push(filePath)
           },
@@ -422,50 +422,39 @@ async function onConfigFileChanged(changedPath) {
         {
           name: `Add import for ${screen.componentName} to navigation config`,
           action: async () => {
-            // CORRECTED: Make this action async and await the inner call
             await addImportToNavigationConfig(screen.componentName, screen.name)
           },
         },
       ]
 
       for (const op of operations) {
-        console.log(`DEBUG: About to prompt confirmOp for "${op.name}"`)
         const { confirmOp } = await inquirer.default.prompt([
           { type: 'confirm', name: 'confirmOp', message: `Confirm: ${op.name}?`, default: true },
         ])
-        console.log(`DEBUG: confirmOp for "${op.name}" responded with: ${confirmOp}`)
         if (!confirmOp) {
           allOpsForBatchConfirmed = false
           console.log(`Operation "${op.name}" cancelled.`)
           break
         }
         try {
-          console.log(`DEBUG: About to execute action for "${op.name}"`)
-          await op.action() // This now correctly awaits for all actions
-          console.log(`DEBUG: Action for "${op.name}" completed.`)
+          await op.action()
         } catch (error) {
           console.error(`Error during "${op.name}":`, error)
           allOpsForBatchConfirmed = false
           break
         }
-        console.log(`DEBUG: About to prompt confirmAfterOp for "${op.name}"`)
-        const { confirmAfterOp } = await inquirer.default.prompt([
-          {
-            type: 'confirm',
-            name: 'confirmAfterOp',
-            message: `"${op.name}" completed. Review and confirm. (Undo aborts batch).`,
-            default: true,
-          },
-        ])
-        console.log(`DEBUG: confirmAfterOp for "${op.name}" responded with: ${confirmAfterOp}`)
-        if (!confirmAfterOp) {
-          allOpsForBatchConfirmed = false
-          console.log(`User chose to undo after "${op.name}".`)
-          break
-        }
+      } // End of operations for one screen
+
+      if (!allOpsForBatchConfirmed) break // Break from processing newScreens loop
+
+      // After all operations for a screen (including potential import addition):
+      if (aProgrammaticChangeJustHappened) {
+        // If addImportToNavigationConfig was the last thing that happened and it wrote to the file
+        console.log('Pausing briefly to allow watcher to process programmatic change...')
+        await new Promise((resolve) => setTimeout(resolve, 100)) // Brief pause
+        aProgrammaticChangeJustHappened = false // Reset the flag
       }
-      if (!allOpsForBatchConfirmed) break
-    }
+    } // End of for (const screen of newScreens)
 
     if (!allOpsForBatchConfirmed) {
       console.log('One or more operations were cancelled. Undoing generated files...')
@@ -487,7 +476,6 @@ async function onConfigFileChanged(changedPath) {
     }
 
     console.log('\nAll files generated successfully for the new screen(s) in this batch!')
-    console.log('DEBUG: About to prompt for confirmAllWork')
     const { confirmAllWork } = await inquirer.default.prompt([
       {
         type: 'confirm',
@@ -496,10 +484,8 @@ async function onConfigFileChanged(changedPath) {
         default: true,
       },
     ])
-    console.log(`DEBUG: confirmAllWork responded with: ${confirmAllWork}`)
 
     if (confirmAllWork) {
-      console.log('DEBUG: About to prompt for shouldCommitNew')
       const { shouldCommitNew } = await inquirer.default.prompt([
         {
           type: 'confirm',
@@ -508,13 +494,10 @@ async function onConfigFileChanged(changedPath) {
           default: true,
         },
       ])
-      console.log(`DEBUG: shouldCommitNew responded with: ${shouldCommitNew}`)
       if (shouldCommitNew) {
-        console.log('DEBUG: About to prompt for commitMessageNew')
         const { commitMessageNew } = await inquirer.default.prompt([
           { type: 'input', name: 'commitMessageNew', message: 'Enter commit message:' },
         ])
-        console.log(`DEBUG: commitMessageNew responded with: ${commitMessageNew}`)
         if (commitMessageNew) {
           const filesToCommit = [
             ...new Set([...generatedFilePaths, NAVIGATION_CONFIG_PATH]),

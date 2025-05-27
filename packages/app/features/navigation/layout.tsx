@@ -1,4 +1,4 @@
-// packages/app/features/navigation/layout.ts
+// packages/app/features/navigation/layout.tsx
 import { ComponentType } from 'react'
 import { Text } from 'react-native' // For placeholder icon
 // Import shared screen components

@@ -13037,7 +13037,7 @@ __metadata:
     simple-git: "npm:^3.27.0"
     typescript: "npm:^5.8.3"
   bin:
-    sync-nav: node ./sync-navigation.ts
+    sync-nav: ./sync-navigation.ts
   languageName: unknown
   linkType: soft
 

@@ -3020,7 +3020,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-navigation/bottom-tabs@npm:^7.3.10, @react-navigation/bottom-tabs@npm:^7.3.12":
+"@react-navigation/bottom-tabs@npm:^7.3.10, @react-navigation/bottom-tabs@npm:^7.3.12, @react-navigation/bottom-tabs@npm:^7.3.13":
   version: 7.3.13
   resolution: "@react-navigation/bottom-tabs@npm:7.3.13"
   dependencies:
@@ -3087,7 +3087,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-navigation/native-stack@npm:^7.3.10":
+"@react-navigation/native-stack@npm:^7.3.10, @react-navigation/native-stack@npm:^7.3.13":
   version: 7.3.13
   resolution: "@react-navigation/native-stack@npm:7.3.13"
   dependencies:
@@ -9304,7 +9304,7 @@ __metadata:
     app: "npm:0.0.0"
     babel-plugin-module-resolver: "npm:^5.0.2"
     burnt: "npm:^0.12.2"
-    expo: "npm:~53.0.8"
+    expo: "npm:~53.0.0"
     expo-constants: "npm:~17.1.6"
     expo-dev-client: "npm:~5.1.8"
     expo-font: "npm:~13.3.1"
@@ -9614,7 +9614,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"expo@npm:~53.0.8":
+"expo@npm:~53.0.0":
   version: 53.0.9
   resolution: "expo@npm:53.0.9"
   dependencies:
@@ -12737,6 +12737,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "next-app@workspace:apps/next"
   dependencies:
+    "@react-navigation/bottom-tabs": "npm:^7.3.13"
+    "@react-navigation/native-stack": "npm:^7.3.13"
     "@tamagui/config": "npm:^1.126.13"
     "@tamagui/next-plugin": "npm:^1.126.13"
     "@tamagui/next-theme": "npm:^1.126.13"

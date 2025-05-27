@@ -1,6 +1,5 @@
 {
   "name": "starter-free",
-  "main": "index.js",
   "private": true,
   "workspaces": [
     "./apps/*",

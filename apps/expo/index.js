@@ -1,4 +1,4 @@
-// apps/expo/index.j
+// apps/expo/index.js
 import { registerRootComponent } from 'expo'
 import { ExpoRoot } from 'expo-router'
 

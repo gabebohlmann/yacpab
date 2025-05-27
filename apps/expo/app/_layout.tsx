@@ -15,33 +15,29 @@ export const unstable_settings = {
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync()
 
-export default function App() {
-  const [interLoaded, interError] = useFonts({
-    Inter: require('@tamagui/font-inter/otf/Inter-Medium.otf'),
-    InterBold: require('@tamagui/font-inter/otf/Inter-Bold.otf'),
+export default function RootLayoutNav() {
+  const colorScheme = useColorScheme()
+  const [fontsLoaded] = useFonts({
+    // Add your fonts here if needed
   })
 
   useEffect(() => {
-    if (interLoaded || interError) {
-      // Hide the splash screen after the fonts have loaded (or an error was returned) and the UI is ready.
+    if (fontsLoaded) {
       SplashScreen.hideAsync()
     }
-  }, [interLoaded, interError])
+  }, [fontsLoaded])
 
-  if (!interLoaded && !interError) {
+  // Don't render anything until fonts are loaded
+  if (!fontsLoaded) {
     return null
   }
-
-  return <RootLayoutNav />
-}
-
-function RootLayoutNav() {
-  const colorScheme = useColorScheme()
 
   return (
     <Provider>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack />
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        </Stack>
         <NativeToast />
       </ThemeProvider>
     </Provider>

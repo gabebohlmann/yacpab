@@ -11,6 +11,8 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@react-navigation/bottom-tabs": "^7.3.13",
+    "@react-navigation/native-stack": "^7.3.13",
     "@tamagui/config": "^1.126.13",
     "@tamagui/next-theme": "^1.126.13",
     "app": "0.0.0",

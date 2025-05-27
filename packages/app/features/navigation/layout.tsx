@@ -4,7 +4,6 @@ import { Text } from 'react-native' // For placeholder icon
 // Import shared screen components
 import { HomeScreen } from '../home/screen'
 import { AccountScreen } from '../account/screen'
-import { SettingsScreen } from '../settings/screen';
 // --- Configuration Types ---
 
 /**
@@ -129,9 +128,9 @@ export const appNavigationStructure: NavigatorLayout[] = [
             },
           },
           {
-            name: 'settings',
-            component: SettingsScreen, // Assuming SettingsScreen is imported
-            options: { title: 'Settings', tabBarIconName: 'settings' },
+            name: 'information',
+            component: InformationScreen, // Assuming SettingsScreen is imported
+            options: { title: 'Information', tabBarIconName: 'information' },
           },
         ],
       },

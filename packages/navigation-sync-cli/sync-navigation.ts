@@ -25,6 +25,7 @@ let lastAcknowledgedConfigState = null
 let actionInProgress = false
 let ignoreNextConfigChange = false
 let reevaluateAfterCompletion = false
+let manualReevaluationScheduledByDecline = false // New flag
 
 function capitalizeFirstLetter(string) {
   return string.charAt(0).toUpperCase() + string.slice(1)
@@ -107,7 +108,7 @@ async function parseNavigationConfig(filePath) {
                                       .getText(sourceFile)
                                       .replace(/'|"/g, '')
                                     if (optName === 'title') screen.title = optValue
-                                    if (optName === 'tabBarIconName') screen.icon = optValue // Keep icon for context if needed
+                                    if (optName === 'tabBarIconName') screen.icon = optValue
                                   }
                                 })
                               }
@@ -148,13 +149,10 @@ function identifyChanges(currentConfig, previousConfig) {
   const currentScreenMap = new Map(currentConfig?.screens?.map((s) => [s.name, s]) || [])
   const previousScreenMap = new Map(previousConfig?.screens?.map((s) => [s.name, s]) || [])
 
-  // Identify new and updated screens
   for (const [name, currentScreen] of currentScreenMap) {
     if (currentScreen.name && currentScreen.componentName) {
-      // Basic validation
       const previousScreen = previousScreenMap.get(name)
       if (previousScreen) {
-        // Screen exists in both, check for updates
         if (
           currentScreen.componentName !== previousScreen.componentName ||
           currentScreen.title !== previousScreen.title
@@ -162,13 +160,11 @@ function identifyChanges(currentConfig, previousConfig) {
           updatedScreens.push({ oldScreen: previousScreen, newScreen: currentScreen })
         }
       } else {
-        // Screen is new
         newScreens.push(currentScreen)
       }
     }
   }
 
-  // Identify deleted screens
   for (const [name, previousScreen] of previousScreenMap) {
     if (previousScreen.name && previousScreen.componentName && !currentScreenMap.has(name)) {
       deletedScreens.push(previousScreen)
@@ -215,7 +211,7 @@ async function generateFeatureScreen(screenName, componentName, title, isUpdate 
         type: 'confirm',
         name: 'overwrite',
         message: `Feature screen file already exists: ${screenFilePath}. ${isUpdate ? 'Update (overwrite)?' : 'Overwrite?'}`,
-        default: isUpdate, // Default to yes for updates, no for new if exists
+        default: isUpdate,
       },
     ])
     if (!overwrite) {
@@ -304,7 +300,6 @@ async function generateNextPageFile(screenName, componentName, isUpdate = false)
   } else if ((await fs.pathExists(nextPageDir)) && !isUpdate) {
     console.log(`Directory ${nextPageDir} exists, but page.tsx will be created.`)
   } else if (!isUpdate) {
-    // For new files, ensure dir
     await fs.ensureDir(nextPageDir)
   }
 
@@ -411,6 +406,8 @@ async function removeImportFromNavigationConfig(componentName) {
 }
 
 async function onConfigFileChanged(changedPath) {
+  manualReevaluationScheduledByDecline = false // Reset for this invocation
+
   if (actionInProgress) {
     console.log('Action already in progress. Will process after current action or on next save.')
     reevaluateAfterCompletion = true
@@ -477,7 +474,7 @@ async function onConfigFileChanged(changedPath) {
             else {
               console.log('Commit cancelled for other changes.')
               return
-            } // Exit if commit cancelled
+            }
           }
         }
 
@@ -581,6 +578,7 @@ async function onConfigFileChanged(changedPath) {
         }
       } else {
         console.log('User chose not to process deletions now. Scheduling re-evaluation.')
+        manualReevaluationScheduledByDecline = true
         setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
         return
       }
@@ -609,7 +607,6 @@ async function onConfigFileChanged(changedPath) {
       if (confirmProcessUpdates) {
         const otherUncommittedChanges = await checkUncommittedChanges()
         if (otherUncommittedChanges.length > 0) {
-          // Simplified Git check
           const { shouldCommitOthersUpd } = await inquirer.default.prompt([
             {
               type: 'confirm',
@@ -668,7 +665,6 @@ async function onConfigFileChanged(changedPath) {
             },
           ]
 
-          // Handle import changes if componentName changed
           if (oldScreen.componentName !== newScreen.componentName) {
             updateOps.push({
               name: `Remove old import for ${oldScreen.componentName}`,
@@ -708,7 +704,6 @@ async function onConfigFileChanged(changedPath) {
 
         if (allUpdateOpsConfirmed && (updatedFilePaths.length > 0 || ignoreNextConfigChange)) {
           console.log('\nUpdate process completed for this batch!')
-          // Commit changes for updates
           const { confirmCommitUpdates } = await inquirer.default.prompt([
             {
               type: 'confirm',
@@ -746,6 +741,7 @@ async function onConfigFileChanged(changedPath) {
         }
       } else {
         console.log('User chose not to process updates now. Scheduling re-evaluation.')
+        manualReevaluationScheduledByDecline = true
         setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
         return
       }
@@ -929,22 +925,27 @@ async function onConfigFileChanged(changedPath) {
         }
       } else {
         console.log('User chose not to process additions now. Scheduling re-evaluation.')
+        manualReevaluationScheduledByDecline = true
         setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
         return
       }
     }
 
+    // If no actionable changes were initially found, or if all detected changes were handled (or declined, leading to re-evaluation)
     if (newScreens.length === 0 && deletedScreens.length === 0 && updatedScreens.length === 0) {
       console.log(
-        'No actionable changes (new/deleted/updated screens) detected after initial parse.'
+        'No actionable changes (new/deleted/updated screens) detected relative to the last acknowledged state.'
       )
-      lastAcknowledgedConfigState = currentConfig
+      lastAcknowledgedConfigState = currentConfig // Acknowledge the current state as it has no actionable diff
     } else if (
       !changesMadeInThisRun &&
       (newScreens.length > 0 || deletedScreens.length > 0 || updatedScreens.length > 0)
     ) {
-      // This case might occur if user declined all operations for detected changes.
-      // The setImmediate for re-evaluation is already handled in those specific decline paths.
+      // This case implies changes were detected, but user declined all operations,
+      // and re-evaluation was already scheduled. No need to update lastAcknowledgedConfigState here.
+      console.log(
+        'Detected changes were presented, but no file operations were performed by user choice.'
+      )
     }
 
     console.log('Processing cycle completed.')
@@ -952,11 +953,12 @@ async function onConfigFileChanged(changedPath) {
     console.error('An error occurred during the main processing sequence:', error)
   } finally {
     actionInProgress = false
-    if (reevaluateAfterCompletion) {
+    if (reevaluateAfterCompletion && !manualReevaluationScheduledByDecline) {
       reevaluateAfterCompletion = false
-      console.log('Re-evaluating config due to changes during previous operation...')
+      console.log('Re-evaluating config due to changes during an active operation...')
       setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
     }
+    // manualReevaluationScheduledByDecline is reset at the start of the next onConfigFileChanged call
   }
 }
 

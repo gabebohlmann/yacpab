@@ -24,6 +24,7 @@ const NEXT_APP_PATH = path.join(MONOREPO_ROOT, 'apps/next/app')
 let lastAcknowledgedConfigState = null
 let actionInProgress = false
 let ignoreNextConfigChange = false
+let reevaluateAfterCompletion = false // New flag
 
 function capitalizeFirstLetter(string) {
   return string.charAt(0).toUpperCase() + string.slice(1)
@@ -39,7 +40,7 @@ async function parseNavigationConfig(filePath) {
       true
     )
 
-    const parsedScreens = [] // Changed variable name for clarity
+    const parsedScreens = []
     function visit(node) {
       if (ts.isVariableStatement(node)) {
         for (const decl of node.declarationList.declarations) {
@@ -112,7 +113,7 @@ async function parseNavigationConfig(filePath) {
                               }
                             }
                           })
-                          if (screen.name && screen.componentName) parsedScreens.push(screen) // Ensure essential fields
+                          if (screen.name && screen.componentName) parsedScreens.push(screen)
                         }
                       })
                     }
@@ -146,17 +147,15 @@ function identifyChanges(currentConfig, previousConfig) {
   const currentScreenMap = new Map(currentConfig?.screens?.map((s) => [s.name, s]) || [])
   const previousScreenMap = new Map(previousConfig?.screens?.map((s) => [s.name, s]) || [])
 
-  // Identify new screens
   for (const [name, screen] of currentScreenMap) {
     if (screen.name && screen.componentName && !previousScreenMap.has(name)) {
       newScreens.push(screen)
     }
   }
 
-  // Identify deleted screens (only those that were previously acknowledged and had a componentName)
   for (const [name, screen] of previousScreenMap) {
     if (screen.name && screen.componentName && !currentScreenMap.has(name)) {
-      deletedScreens.push(screen) // screen object from previousConfig is important here
+      deletedScreens.push(screen)
     }
   }
   return { newScreens, deletedScreens }
@@ -190,7 +189,6 @@ async function commitChanges(message, filesToAdd = []) {
   }
 }
 
-// --- Generation Functions ---
 async function generateFeatureScreen(screenName, componentName, title) {
   const featurePath = path.join(FEATURES_PATH, screenName)
   const screenFilePath = path.join(featurePath, 'screen.tsx')
@@ -338,7 +336,6 @@ async function addImportToNavigationConfig(componentName, screenName) {
   }
 }
 
-// --- Deletion Functions ---
 async function deleteFeature(screenName) {
   const featurePath = path.join(FEATURES_PATH, screenName)
   if (await fs.pathExists(featurePath)) {
@@ -364,7 +361,7 @@ async function deleteExpoTabFile(screenName) {
 async function deleteNextPage(screenName) {
   const nextPageDir = path.join(NEXT_APP_PATH, '(tabs)', screenName)
   if (await fs.pathExists(nextPageDir)) {
-    await fs.remove(nextPageDir) // Removes the directory and its contents (page.tsx)
+    await fs.remove(nextPageDir)
     console.log(`Deleted Next.js page directory: ${nextPageDir}`)
     return nextPageDir
   }
@@ -373,8 +370,6 @@ async function deleteNextPage(screenName) {
 }
 
 async function removeImportFromNavigationConfig(componentName) {
-  // This is a simplified regex approach. AST manipulation is more robust.
-  // It looks for lines like: import { ComponentName } from '../somePath/screen';
   const importRegex = new RegExp(
     `^import\\s+\\{\\s*${componentName}\\s*\\}\\s+from\\s+['"][^'"]+['"];?\\s*\\n?`,
     'gm'
@@ -400,6 +395,7 @@ async function removeImportFromNavigationConfig(componentName) {
 async function onConfigFileChanged(changedPath) {
   if (actionInProgress) {
     console.log('Action already in progress. Will process after current action or on next save.')
+    reevaluateAfterCompletion = true // Mark that a re-evaluation is needed
     return
   }
   actionInProgress = true
@@ -407,7 +403,7 @@ async function onConfigFileChanged(changedPath) {
   try {
     if (changedPath === NAVIGATION_CONFIG_PATH && ignoreNextConfigChange) {
       ignoreNextConfigChange = false
-      return
+      return // Return without resetting actionInProgress here, finally block will handle it
     }
 
     console.log(`Change detected in ${NAVIGATION_CONFIG_PATH}. Parsing...`)
@@ -415,7 +411,7 @@ async function onConfigFileChanged(changedPath) {
 
     if (!currentConfig) {
       console.warn('Could not parse navigation config. Waiting for next valid change.')
-      return
+      return // Return without resetting actionInProgress here
     }
 
     const { newScreens, deletedScreens } = identifyChanges(
@@ -423,7 +419,7 @@ async function onConfigFileChanged(changedPath) {
       lastAcknowledgedConfigState
     )
 
-    let changesMadeInThisRun = false // Track if any file operations actually happen
+    let changesMadeInThisRun = false
 
     // --- Handle Deletions ---
     if (deletedScreens.length > 0) {
@@ -436,13 +432,37 @@ async function onConfigFileChanged(changedPath) {
           type: 'confirm',
           name: 'confirmProcessDeletions',
           message: `The following screen(s) seem to be removed from config: ${deletedScreens.map((s) => s.name).join(', ')}. Delete associated files?`,
-          default: false, // Default to no for safety
+          default: false,
         },
       ])
 
       if (confirmProcessDeletions) {
         const otherUncommittedChanges = await checkUncommittedChanges()
-        // (Git check logic as in additions - omitted for brevity here, but should be included)
+        if (otherUncommittedChanges.length > 0) {
+          // Simplified Git check for brevity
+          const { shouldCommitOthersDel } = await inquirer.default.prompt([
+            {
+              type: 'confirm',
+              name: 'shouldCommitOthersDel',
+              message: 'Other uncommitted changes exist. Commit them first?',
+              default: false,
+            },
+          ])
+          if (shouldCommitOthersDel) {
+            const { commitMsgDel } = await inquirer.default.prompt([
+              { type: 'input', name: 'commitMsgDel', message: 'Commit message for other changes:' },
+            ])
+            if (commitMsgDel)
+              await commitChanges(
+                commitMsgDel,
+                otherUncommittedChanges.map((f) => f.path)
+              )
+            else {
+              console.log('Commit cancelled.')
+              return
+            }
+          }
+        }
 
         const deletedFilePaths = []
         let allDeletionOpsConfirmed = true
@@ -503,9 +523,9 @@ async function onConfigFileChanged(changedPath) {
           if (!allDeletionOpsConfirmed) break
         }
 
-        if (allDeletionOpsConfirmed && deletedFilePaths.length > 0) {
+        if (allDeletionOpsConfirmed && (deletedFilePaths.length > 0 || ignoreNextConfigChange)) {
+          // Check if files were deleted OR import was removed
           console.log('\nDeletion process completed for this batch!')
-          // Commit changes for deletions
           const { confirmCommitDeletions } = await inquirer.default.prompt([
             {
               type: 'confirm',
@@ -529,21 +549,20 @@ async function onConfigFileChanged(changedPath) {
               await commitChanges(commitMessageDeletions, filesToCommit)
             }
           }
-          lastAcknowledgedConfigState = currentConfig // Reflect that deletions are synced
+          lastAcknowledgedConfigState = currentConfig
         } else if (!allDeletionOpsConfirmed) {
           console.log(
             'Deletion process cancelled. No files were committed. Manual cleanup of partial deletions might be needed.'
           )
-          // Do NOT update lastAcknowledgedConfigState
-          return // Exit this onConfigFileChanged cycle
+          return
         } else {
-          console.log("No files were actually deleted (e.g., they didn't exist).")
-          lastAcknowledgedConfigState = currentConfig // Config reflects no items, and no files were there.
+          console.log(
+            "No files were actually deleted (e.g., they didn't exist or import wasn't found)."
+          )
+          lastAcknowledgedConfigState = currentConfig
         }
       } else {
-        console.log('User chose not to process deletions now. They will be re-detected.')
-        // Do NOT update lastAcknowledgedConfigState.
-        // Schedule re-evaluation to pick up any other changes or re-prompt for these deletions.
+        console.log('User chose not to process deletions now. Scheduling re-evaluation.')
         setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
         return
       }
@@ -565,10 +584,31 @@ async function onConfigFileChanged(changedPath) {
       ])
 
       if (confirmProcessAdditions) {
-        // (Git check logic as before - can be refactored into a function)
         const otherUncommittedChanges = await checkUncommittedChanges()
         if (otherUncommittedChanges.length > 0) {
-          // ... prompt to commit other changes ... (omitted for brevity)
+          // Simplified Git check for brevity
+          const { shouldCommitOthersAdd } = await inquirer.default.prompt([
+            {
+              type: 'confirm',
+              name: 'shouldCommitOthersAdd',
+              message: 'Other uncommitted changes exist. Commit them first?',
+              default: false,
+            },
+          ])
+          if (shouldCommitOthersAdd) {
+            const { commitMsgAdd } = await inquirer.default.prompt([
+              { type: 'input', name: 'commitMsgAdd', message: 'Commit message for other changes:' },
+            ])
+            if (commitMsgAdd)
+              await commitChanges(
+                commitMsgAdd,
+                otherUncommittedChanges.map((f) => f.path)
+              )
+            else {
+              console.log('Commit cancelled.')
+              return
+            }
+          }
         }
 
         const generatedFilePaths = []
@@ -635,31 +675,70 @@ async function onConfigFileChanged(changedPath) {
 
         if (!allAdditionOpsConfirmed) {
           if (generatedFilePaths.length > 0) {
-            /* ... undo logic ... */
+            console.log(
+              'One or more operations were cancelled. Undoing generated files for this batch...'
+            )
+            for (const filePath of generatedFilePaths) {
+              try {
+                if (await fs.pathExists(filePath)) {
+                  await fs.remove(filePath)
+                  console.log(`Removed: ${filePath}`)
+                }
+              } catch (undoError) {
+                console.error(`Error undoing ${filePath}:`, undoError)
+              }
+            }
+          } else {
+            console.log('Addition process cancelled, no files to undo.')
           }
-          console.log('Addition process cancelled.')
-          // Do NOT update lastAcknowledgedConfigState
+          console.log(
+            'Aborting addition operations for this batch. Programmatic changes to layout.tsx (if any) might need manual revert.'
+          )
           return
         }
 
         if (generatedFilePaths.length > 0 || ignoreNextConfigChange) {
-          // ignoreNextConfigChange implies import was added
           console.log('\nFile generation/update process for additions completed!')
-          // (Commit logic as before - omitted for brevity)
-          const { confirmAllWork } = await inquirer.default.prompt(/* ... */)
+          const { confirmAllWork } = await inquirer.default.prompt([
+            {
+              type: 'confirm',
+              name: 'confirmAllWork',
+              message: 'All attempted changes for additions are done. Do they work as expected?',
+              default: true,
+            },
+          ])
           if (confirmAllWork) {
-            const { shouldCommitNew } = await inquirer.default.prompt(/* ... */)
+            const { shouldCommitNew } = await inquirer.default.prompt([
+              {
+                type: 'confirm',
+                name: 'shouldCommitNew',
+                message: 'Commit these addition changes?',
+                default: true,
+              },
+            ])
             if (shouldCommitNew) {
-              const { commitMessageNew } = await inquirer.default.prompt(/* ... */)
+              const { commitMessageNew } = await inquirer.default.prompt([
+                {
+                  type: 'input',
+                  name: 'commitMessageNew',
+                  message: 'Enter commit message for additions:',
+                },
+              ])
               if (commitMessageNew) {
                 const filesToCommit = [
                   ...new Set([...generatedFilePaths, NAVIGATION_CONFIG_PATH]),
                 ].filter(Boolean)
                 await commitChanges(commitMessageNew, filesToCommit)
+              } else {
+                console.log('No commit message. Not committing additions.')
               }
             }
+          } else {
+            console.log(
+              'User indicated addition changes might not be working. Please review and commit manually.'
+            )
           }
-          lastAcknowledgedConfigState = currentConfig // Additions synced
+          lastAcknowledgedConfigState = currentConfig
         } else if (allAdditionOpsConfirmed) {
           console.log(
             '\nNo new files were generated for additions (e.g., all existing files were skipped and no imports needed).'
@@ -667,21 +746,18 @@ async function onConfigFileChanged(changedPath) {
           lastAcknowledgedConfigState = currentConfig
         }
       } else {
-        console.log('User chose not to process additions now.')
-        // Do NOT update lastAcknowledgedConfigState.
-        // Schedule re-evaluation.
+        console.log('User chose not to process additions now. Scheduling re-evaluation.')
         setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
         return
       }
     }
 
-    // If neither new screens nor deleted screens were found initially, or if they were handled.
     if (newScreens.length === 0 && deletedScreens.length === 0) {
       console.log('No actionable changes (new/deleted screens) detected after initial parse.')
       lastAcknowledgedConfigState = currentConfig
     } else if (!changesMadeInThisRun && (newScreens.length > 0 || deletedScreens.length > 0)) {
       // This case might occur if user declined all operations for detected changes.
-      // We already handle the setImmediate for re-evaluation in those paths.
+      // The setImmediate for re-evaluation is already handled in those specific decline paths.
     }
 
     console.log('Processing cycle completed.')
@@ -689,6 +765,11 @@ async function onConfigFileChanged(changedPath) {
     console.error('An error occurred during the main processing sequence:', error)
   } finally {
     actionInProgress = false
+    if (reevaluateAfterCompletion) {
+      reevaluateAfterCompletion = false
+      console.log('Re-evaluating config due to changes during previous operation...')
+      setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
+    }
   }
 }
 

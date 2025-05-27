@@ -8,12 +8,12 @@ const simpleGit = require('simple-git')
 const ts = require('typescript')
 
 // Set CWD as MONOREPO ROOT
-const cliPackageDir = process.cwd() // Now this is /home/gabeb/Coding/yacpab/packages/navigation-sync-cli
-const MONOREPO_ROOT = path.resolve(cliPackageDir, '../..') // Go up two levels
-console.log('Deduced Monorepo Root:', MONOREPO_ROOT)
-const CWD = MONOREPO_ROOT
+// const cliPackageDir = process.cwd() // Now this is /home/gabeb/Coding/yacpab/packages/navigation-sync-cli
+// const MONOREPO_ROOT = path.resolve(cliPackageDir, '../..') // Go up two levels
+// console.log('Deduced Monorepo Root:', MONOREPO_ROOT)
+// const CWD = MONOREPO_ROOT
 
-// const CWD = process.cwd() // Current Working Directory
+const CWD = process.cwd() // Current Working Directory
 // console.log(CWD)
 const git = simpleGit({ baseDir: CWD })
 

@@ -1,0 +1,17 @@
+{
+  "name": "navigation-sync-cli",
+  "packageManager": "yarn@4.5.0",
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "fs-extra": "^11.3.0",
+    "inquirer": "^12.6.3",
+    "simple-git": "^3.27.0",
+    "typescript": "^5.8.3"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11"
+  },
+  "bin": {
+    "sync-nav": "node ./sync-navigation.js"
+  }
+}

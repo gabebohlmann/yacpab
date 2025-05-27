@@ -193,7 +193,7 @@ async function generateFeatureScreen(screenName, componentName, title) {
     ])
     if (!overwrite) {
       console.log(`Skipped overwriting: ${screenFilePath}`)
-      return null // Indicate file was not written
+      return null
     }
   }
 
@@ -244,7 +244,7 @@ async function generateExpoTabFile(screenName, componentName) {
     }
   }
 
-  await fs.ensureDir(expoTabDir) // Should already exist but good practice
+  await fs.ensureDir(expoTabDir)
   const content = `// apps/expo/app/(tabs)/${screenName}.tsx
 import { ${componentName} } from 'app/features/${screenName}/screen';
 
@@ -262,7 +262,6 @@ async function generateNextPageFile(screenName, componentName) {
   const nextFilePath = path.join(nextPageDir, 'page.tsx')
 
   if (await fs.pathExists(nextFilePath)) {
-    // Check if page.tsx exists
     const { overwrite } = await inquirer.default.prompt([
       {
         type: 'confirm',
@@ -276,7 +275,6 @@ async function generateNextPageFile(screenName, componentName) {
       return null
     }
   } else if (await fs.pathExists(nextPageDir)) {
-    // Check if directory exists but page.tsx doesn't
     console.log(`Directory ${nextPageDir} exists, but page.tsx will be created.`)
   }
 
@@ -331,43 +329,44 @@ async function addImportToNavigationConfig(componentName, screenName) {
 }
 
 async function onConfigFileChanged(changedPath) {
-  if (changedPath === NAVIGATION_CONFIG_PATH && ignoreNextConfigChange) {
-    // console.log('Change to navigation config was programmatic, ignoring this event.') // User commented this out
-    ignoreNextConfigChange = false
-    return
-  }
-
   if (actionInProgress) {
     console.log(
       'Action already in progress. Change will be processed after current action completes or on next save.'
     )
     return
   }
-
-  console.log(`Change detected in ${NAVIGATION_CONFIG_PATH}. Parsing...`)
-  const currentConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
-
-  if (!currentConfig) {
-    console.warn(
-      'Could not parse navigation config or file is invalid. Waiting for next valid change.'
-    )
-    return
-  }
-
-  const newScreens = identifyNewScreens(currentConfig, lastAcknowledgedConfigState)
-
-  if (newScreens.length === 0) {
-    console.log('No new screens detected compared to the last acknowledged state.')
-    lastAcknowledgedConfigState = currentConfig
-    return
-  }
-
-  console.log(
-    `Detected ${newScreens.length} potential new screen(s):`,
-    newScreens.map((s) => s.name).join(', ')
-  )
+  actionInProgress = true
 
   try {
+    if (changedPath === NAVIGATION_CONFIG_PATH && ignoreNextConfigChange) {
+      // console.log('Change to navigation config was programmatic, ignoring this event.')
+      ignoreNextConfigChange = false
+      return
+    }
+
+    console.log(`Change detected in ${NAVIGATION_CONFIG_PATH}. Parsing...`)
+    const currentConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
+
+    if (!currentConfig) {
+      console.warn(
+        'Could not parse navigation config or file is invalid. Waiting for next valid change.'
+      )
+      return
+    }
+
+    const newScreens = identifyNewScreens(currentConfig, lastAcknowledgedConfigState)
+
+    if (newScreens.length === 0) {
+      console.log('No new screens detected compared to the last acknowledged state.')
+      lastAcknowledgedConfigState = currentConfig
+      return
+    }
+
+    console.log(
+      `Detected ${newScreens.length} potential new screen(s):`,
+      newScreens.map((s) => s.name).join(', ')
+    )
+
     const { confirmProcessNow } = await inquirer.default.prompt([
       {
         type: 'confirm',
@@ -378,15 +377,18 @@ async function onConfigFileChanged(changedPath) {
     ])
 
     if (!confirmProcessNow) {
-      console.log(
-        'User chose not to process changes now. These changes will be re-evaluated on the next file modification.'
-      )
-      lastAcknowledgedConfigState = currentConfig
+      console.log('User chose not to process changes now. Scheduling re-evaluation...')
+      // DO NOT update lastAcknowledgedConfigState here.
+      // Schedule an immediate re-evaluation.
+      // The current onConfigFileChanged instance will finish, actionInProgress will become false,
+      // then the new call will start.
+      setImmediate(() => {
+        onConfigFileChanged(NAVIGATION_CONFIG_PATH)
+      })
       return
     }
 
-    actionInProgress = true
-
+    // User confirmed to process this batch, proceed with Git checks etc.
     const otherUncommittedChanges = await checkUncommittedChanges()
     if (otherUncommittedChanges.length > 0) {
       console.log('Uncommitted changes found (excluding navigation config):')
@@ -414,7 +416,6 @@ async function onConfigFileChanged(changedPath) {
           )
         } else {
           console.log('No commit message provided. Aborting current operation.')
-          actionInProgress = false
           return
         }
       } else {
@@ -423,7 +424,7 @@ async function onConfigFileChanged(changedPath) {
     }
 
     console.log(`Proceeding with generation for: ${newScreens.map((s) => s.name).join(', ')}.`)
-    const generatedFilePaths = [] // Store paths of files actually written or overwritten
+    const generatedFilePaths = []
     let allOpsForBatchConfirmed = true
 
     for (const screen of newScreens) {
@@ -444,7 +445,7 @@ async function onConfigFileChanged(changedPath) {
               screen.componentName,
               screen.title || screen.name
             )
-            if (filePath) generatedFilePaths.push(filePath) // Only add if file was written
+            if (filePath) generatedFilePaths.push(filePath)
           },
         },
         {
@@ -465,8 +466,6 @@ async function onConfigFileChanged(changedPath) {
           name: `Add import for ${screen.componentName} to navigation config`,
           action: async () => {
             await addImportToNavigationConfig(screen.componentName, screen.name)
-            // This operation doesn't generate a new file path to add to generatedFilePaths for commit,
-            // but NAVIGATION_CONFIG_PATH is added to commit list later if changes occurred.
           },
         },
       ]
@@ -478,47 +477,46 @@ async function onConfigFileChanged(changedPath) {
         if (!confirmOp) {
           allOpsForBatchConfirmed = false
           console.log(`Operation "${op.name}" cancelled.`)
-          break // Stop operations for this screen
+          break
         }
         try {
           await op.action()
         } catch (error) {
           console.error(`Error during "${op.name}":`, error)
           allOpsForBatchConfirmed = false
-          break // Stop operations for this screen on error
+          break
         }
       }
 
-      if (!allOpsForBatchConfirmed) break // Stop processing further screens if current screen's ops were cancelled
+      if (!allOpsForBatchConfirmed) break
     }
 
-    if (!allOpsForBatchConfirmed && generatedFilePaths.length > 0) {
-      // Only undo if files were actually generated
-      console.log(
-        'One or more operations were cancelled. Undoing generated files for this batch...'
-      )
-      for (const filePath of generatedFilePaths) {
-        try {
-          if (await fs.pathExists(filePath)) {
-            await fs.remove(filePath)
-            console.log(`Removed: ${filePath}`)
+    if (!allOpsForBatchConfirmed) {
+      if (generatedFilePaths.length > 0) {
+        console.log(
+          'One or more operations were cancelled. Undoing generated files for this batch...'
+        )
+        for (const filePath of generatedFilePaths) {
+          try {
+            if (await fs.pathExists(filePath)) {
+              await fs.remove(filePath)
+              console.log(`Removed: ${filePath}`)
+            }
+          } catch (undoError) {
+            console.error(`Error undoing ${filePath}:`, undoError)
           }
-        } catch (undoError) {
-          console.error(`Error undoing ${filePath}:`, undoError)
         }
+      } else {
+        console.log('Operations cancelled, no files to undo for this batch.')
       }
       console.log(
         'Aborting operations for this batch. Programmatic changes to layout.tsx (if any) might need manual revert.'
       )
-      actionInProgress = false
-      return // Exit processing for this detected change event
+      // DO NOT update lastAcknowledgedConfigState if batch was cancelled.
+      return
     }
 
-    // If allOpsForBatchConfirmed is true, or it's false but no files were generated (e.g., user skipped all overwrites)
-    // we can proceed to the commit stage if there's anything to commit.
-
     if (generatedFilePaths.length > 0 || ignoreNextConfigChange) {
-      // Check if any file was written or import was added
       console.log('\nFile generation/update process for this batch completed!')
       const { confirmAllWork } = await inquirer.default.prompt([
         {
@@ -543,7 +541,6 @@ async function onConfigFileChanged(changedPath) {
             { type: 'input', name: 'commitMessageNew', message: 'Enter commit message:' },
           ])
           if (commitMessageNew) {
-            // Files to commit: generated files + navigation config if it was changed by adding an import
             const filesToCommit = [
               ...new Set([...generatedFilePaths, NAVIGATION_CONFIG_PATH]),
             ].filter(Boolean)
@@ -561,11 +558,14 @@ async function onConfigFileChanged(changedPath) {
           'User indicated changes might not be working. Please review and commit manually.'
         )
       }
+      lastAcknowledgedConfigState = currentConfig
     } else if (allOpsForBatchConfirmed) {
-      console.log('\nNo new files were generated (e.g., all existing files were skipped).')
+      console.log(
+        '\nNo new files were generated or imports added (e.g., all existing files were skipped and no imports needed).'
+      )
+      lastAcknowledgedConfigState = currentConfig
     }
 
-    lastAcknowledgedConfigState = currentConfig
     console.log('Processing for the current batch of screens completed.')
   } catch (error) {
     console.error('An error occurred during the main processing sequence:', error)

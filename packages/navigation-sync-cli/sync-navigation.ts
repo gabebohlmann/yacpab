@@ -13,8 +13,9 @@ const ts = require('typescript')
 // console.log('Deduced Monorepo Root:', MONOREPO_ROOT)
 // const CWD = MONOREPO_ROOT
 
-const CWD = process.cwd() // Current Working Directory
+const MONOREPO_ROOT = process.cwd() // Current Working Directory
 // console.log(CWD)
+const CWD = MONOREPO_ROOT
 const git = simpleGit({ baseDir: CWD })
 
 const NAVIGATION_CONFIG_PATH = path.join(CWD, 'packages/app/features/navigation/layout.tsx')
@@ -22,8 +23,9 @@ const FEATURES_PATH = path.join(CWD, 'packages/app/features')
 const EXPO_APP_PATH = path.join(CWD, 'apps/expo/app')
 const NEXT_APP_PATH = path.join(CWD, 'apps/next/app')
 
-let isProcessing = false // To prevent concurrent processing
-let lastKnownConfigState = null // To store a representation of the last processed config
+
+let lastAcknowledgedConfigState = null; // Stores the config state that was last acted upon or acknowledged by user
+let actionInProgress = false; // Prevents concurrent execution of the main processing block
 
 // --- Helper: Capitalize first letter for component names ---
 function capitalizeFirstLetter(string) {
@@ -38,87 +40,63 @@ function capitalizeFirstLetter(string) {
  */
 async function parseNavigationConfig(filePath) {
   try {
-    const fileContent = await fs.readFile(filePath, 'utf-8')
+    const fileContent = await fs.readFile(filePath, 'utf-8');
     const sourceFile = ts.createSourceFile(
       path.basename(filePath),
       fileContent,
       ts.ScriptTarget.ESNext,
       true // setParentNodes
-    )
+    );
 
-    const newScreens = [] // Example: [{ name: 'settings', componentName: 'SettingsScreen', title: 'Settings', icon: 'settings'}]
-
-    // VERY SIMPLIFIED: Look for a specific structure indicating new screens.
-    // A robust implementation would traverse the AST deeply.
+    const newScreens = [];
     function visit(node) {
       if (ts.isVariableStatement(node)) {
         for (const decl of node.declarationList.declarations) {
           if (decl.name.getText(sourceFile) === 'appNavigationStructure') {
             if (decl.initializer && ts.isArrayLiteralExpression(decl.initializer)) {
-              const rootStack = decl.initializer.elements[0] // Assuming first element is root stack
+              const rootStack = decl.initializer.elements[0];
               if (rootStack && ts.isObjectLiteralExpression(rootStack)) {
-                const screensProp = rootStack.properties.find(
-                  (p) => p.name.getText(sourceFile) === 'screens'
-                )
-                if (
-                  screensProp &&
-                  ts.isPropertyAssignment(screensProp) &&
-                  ts.isArrayLiteralExpression(screensProp.initializer)
-                ) {
-                  const tabsNavigatorConfig = screensProp.initializer.elements.find((el) => {
+                const screensProp = rootStack.properties.find(p => p.name?.getText(sourceFile) === 'screens');
+                if (screensProp && ts.isPropertyAssignment(screensProp) && ts.isArrayLiteralExpression(screensProp.initializer)) {
+                  const tabsNavigatorConfig = screensProp.initializer.elements.find(el => {
                     if (ts.isObjectLiteralExpression(el)) {
-                      const typeProp = el.properties.find(
-                        (p) => p.name.getText(sourceFile) === 'type'
-                      )
-                      return (
-                        typeProp &&
-                        ts.isPropertyAssignment(typeProp) &&
-                        typeProp.initializer.getText(sourceFile) === "'tabs'"
-                      )
+                      const typeProp = el.properties.find(p => p.name?.getText(sourceFile) === 'type');
+                      const nameProp = el.properties.find(p => p.name?.getText(sourceFile) === 'name');
+                      return typeProp && ts.isPropertyAssignment(typeProp) && typeProp.initializer.getText(sourceFile).includes('tabs') &&
+                             nameProp && ts.isPropertyAssignment(nameProp) && nameProp.initializer.getText(sourceFile).includes('(tabs)');
                     }
-                    return false
-                  })
+                    return false;
+                  });
 
                   if (tabsNavigatorConfig && ts.isObjectLiteralExpression(tabsNavigatorConfig)) {
-                    const tabScreensProp = tabsNavigatorConfig.properties.find(
-                      (p) => p.name.getText(sourceFile) === 'screens'
-                    )
-                    if (
-                      tabScreensProp &&
-                      ts.isPropertyAssignment(tabScreensProp) &&
-                      ts.isArrayLiteralExpression(tabScreensProp.initializer)
-                    ) {
-                      tabScreensProp.initializer.elements.forEach((tabScreenNode) => {
+                    const tabScreensProp = tabsNavigatorConfig.properties.find(p => p.name?.getText(sourceFile) === 'screens');
+                    if (tabScreensProp && ts.isPropertyAssignment(tabScreensProp) && ts.isArrayLiteralExpression(tabScreensProp.initializer)) {
+                      tabScreensProp.initializer.elements.forEach(tabScreenNode => {
                         if (ts.isObjectLiteralExpression(tabScreenNode)) {
-                          const screen = {}
-                          tabScreenNode.properties.forEach((prop) => {
-                            if (ts.isPropertyAssignment(prop)) {
-                              const propName = prop.name.getText(sourceFile)
-                              const propValueNode = prop.initializer
-                              let propValue = propValueNode.getText(sourceFile).replace(/'/g, '') // Basic cleanup
+                          const screen = {};
+                          tabScreenNode.properties.forEach(prop => {
+                            if (ts.isPropertyAssignment(prop) && prop.name) {
+                              const propName = prop.name.getText(sourceFile);
+                              const propValueNode = prop.initializer;
+                              let propValue = propValueNode.getText(sourceFile).replace(/'|"/g, ""); // Basic cleanup
 
-                              if (propName === 'name') screen.name = propValue
-                              if (propName === 'component') screen.componentName = propValue // e.g., "SettingsScreen"
-                              if (
-                                propName === 'options' &&
-                                ts.isObjectLiteralExpression(propValueNode)
-                              ) {
-                                propValueNode.properties.forEach((optProp) => {
-                                  if (ts.isPropertyAssignment(optProp)) {
-                                    const optName = optProp.name.getText(sourceFile)
-                                    const optValue = optProp.initializer
-                                      .getText(sourceFile)
-                                      .replace(/'/g, '')
-                                    if (optName === 'title') screen.title = optValue
-                                    if (optName === 'tabBarIconName') screen.icon = optValue
+                              if (propName === 'name') screen.name = propValue;
+                              if (propName === 'component') screen.componentName = propValue;
+                              if (propName === 'options' && ts.isObjectLiteralExpression(propValueNode)) {
+                                propValueNode.properties.forEach(optProp => {
+                                  if (ts.isPropertyAssignment(optProp) && optProp.name) {
+                                    const optName = optProp.name.getText(sourceFile);
+                                    const optValue = optProp.initializer.getText(sourceFile).replace(/'|"/g, "");
+                                    if (optName === 'title') screen.title = optValue;
+                                    if (optName === 'tabBarIconName') screen.icon = optValue;
                                   }
-                                })
+                                });
                               }
                             }
-                          })
-                          if (screen.name) newScreens.push(screen)
+                          });
+                          if (screen.name) newScreens.push(screen);
                         }
-                      })
+                      });
                     }
                   }
                 }
@@ -127,22 +105,21 @@ async function parseNavigationConfig(filePath) {
           }
         }
       }
-      ts.forEachChild(node, visit)
+      ts.forEachChild(node, visit);
     }
+    visit(sourceFile);
+    // console.log('Parsed screens:', JSON.stringify(newScreens, null, 2)); // Keep for debugging
+    return { screens: newScreens };
 
-    visit(sourceFile)
-    console.log('Parsed screens:', JSON.stringify(newScreens, null, 2))
-    return { screens: newScreens } // Return the identified screens
   } catch (error) {
-    console.error('Error parsing navigation config:', error.message)
-    // Avoid crashing on temporary syntax errors during autosave
-    if (error instanceof SyntaxError) {
-      console.warn(
-        'Syntax error in navigation config, likely due to autosave. Skipping this change.'
-      )
-      return null
+    console.error('Error parsing navigation config:', error.message);
+    if (error instanceof SyntaxError || error.message.includes('SyntaxError')) { // Broader check for syntax issues
+        console.warn("Syntax error in navigation config, likely due to autosave. Skipping this change.");
+        return null;
     }
-    throw error // Re-throw other errors
+    // For other errors, you might want to decide if they should halt or be logged.
+    // For now, returning null will prevent processing.
+    return null;
   }
 }
 
@@ -155,28 +132,36 @@ async function parseNavigationConfig(filePath) {
  */
 function identifyNewScreens(currentConfig, previousConfig) {
   if (!currentConfig || !currentConfig.screens) return []
-  if (!previousConfig || !previousConfig.screens) return currentConfig.screens // All are new
+  if (!previousConfig || !previousConfig.screens)
+    return currentConfig.screens.filter((s) => s.name && s.componentName) // Ensure essential fields exist
 
   const previousScreenNames = new Set(previousConfig.screens.map((s) => s.name))
-  return currentConfig.screens.filter((s) => !previousScreenNames.has(s.name))
+  return currentConfig.screens.filter(
+    (s) => s.name && s.componentName && !previousScreenNames.has(s.name)
+  )
 }
 
 // --- Git Operations ---
 async function checkUncommittedChanges() {
   const status = await git.status()
-  // Filter out the navigation config file itself from this initial check
   const otherChanges = status.files.filter(
-    (file) => path.join(CWD, file.path) !== NAVIGATION_CONFIG_PATH && file.working_dir !== '?'
-  ) // Exclude untracked
+    (file) =>
+      path.join(MONOREPO_ROOT, file.path) !== NAVIGATION_CONFIG_PATH && file.working_dir !== '?'
+  )
   return otherChanges
 }
 
 async function commitChanges(message, filesToAdd = []) {
   try {
-    if (filesToAdd.length > 0) {
-      await git.add(filesToAdd)
+    const absoluteFilesToAdd = filesToAdd.map((f) =>
+      path.isAbsolute(f) ? f : path.join(MONOREPO_ROOT, f)
+    )
+    if (absoluteFilesToAdd.length > 0) {
+      await git.add(absoluteFilesToAdd)
     } else {
-      await git.add('.') // Add all changes if no specific files provided
+      // Be cautious with 'git add .' - ensure CWD for git is MONOREPO_ROOT
+      // await git.add('.'); // Might be too broad if not careful with git's CWD
+      console.warn('Commit called with no specific files to add.')
     }
     await git.commit(message)
     console.log('Changes committed successfully.')
@@ -290,41 +275,58 @@ async function addImportToNavigationConfig(componentName, screenName) {
 }
 
 // --- Main Processing Logic ---
-async function processNavigationChange() {
-  if (isProcessing) {
-    console.log('Already processing a change, skipping.')
-    return
+async function onConfigFileChanged() {
+  if (actionInProgress) {
+    console.log('Action already in progress. Change will be processed after current action completes or on next save.');
+    return;
   }
-  isProcessing = true
-  console.log(`Change detected in ${NAVIGATION_CONFIG_PATH}`)
+
+  console.log(`Change detected in ${NAVIGATION_CONFIG_PATH}. Parsing...`);
+  const currentConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+
+  if (!currentConfig) {
+    console.warn("Could not parse navigation config or file is invalid. Waiting for next valid change.");
+    return;
+  }
+
+  const newScreens = identifyNewScreens(currentConfig, lastAcknowledgedConfigState);
+
+  if (newScreens.length === 0) {
+    console.log('No new screens detected compared to the last acknowledged state.');
+    // Update acknowledged state to the latest parsed valid state, even if no new screens,
+    // so that minor refactors in the config don't keep triggering "no new screens".
+    lastAcknowledgedConfigState = currentConfig;
+    return;
+  }
+
+  console.log(`Detected ${newScreens.length} potential new screen(s):`, newScreens.map(s => s.name).join(', '));
 
   try {
-    const currentConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
-    if (!currentConfig) {
-      // Parsing failed, likely syntax error
-      isProcessing = false
-      return
+    const { confirmProcessNow } = await inquirer.default.prompt([
+      {
+        type: 'confirm',
+        name: 'confirmProcessNow',
+        message: `The following new screen(s) were detected: ${newScreens.map(s => s.name).join(', ')}. Do you want to proceed with generating files and updates for them now?`,
+        default: true,
+      },
+    ]);
+
+    if (!confirmProcessNow) {
+      console.log('User chose not to process changes now. These changes will be re-evaluated on the next file modification.');
+      // Update acknowledged state so we don't re-prompt for these exact same new screens immediately
+      // if the file is saved again without further textual changes.
+      lastAcknowledgedConfigState = currentConfig;
+      return;
     }
 
-    const newScreens = identifyNewScreens(currentConfig, lastKnownConfigState)
-
-    if (newScreens.length === 0) {
-      console.log('No new screens detected based on current logic.')
-      lastKnownConfigState = currentConfig // Update state even if no new screens
-      isProcessing = false
-      return
-    }
-
-    console.log(
-      `Detected ${newScreens.length} new screen(s):`,
-      newScreens.map((s) => s.name).join(', ')
-    )
+    // User confirmed to process, now start the action sequence
+    actionInProgress = true;
 
     // 1. Git: Check for other uncommitted changes
-    const otherUncommittedChanges = await checkUncommittedChanges()
+    const otherUncommittedChanges = await checkUncommittedChanges();
     if (otherUncommittedChanges.length > 0) {
-      console.log('Uncommitted changes found (excluding navigation config):')
-      otherUncommittedChanges.forEach((f) => console.log(`  - ${f.path} (${f.working_dir})`))
+      console.log('Uncommitted changes found (excluding navigation config):');
+      otherUncommittedChanges.forEach(f => console.log(`  - ${f.path} (${f.working_dir})`));
       const { shouldCommitOthers } = await inquirer.default.prompt([
         {
           type: 'confirm',
@@ -332,211 +334,186 @@ async function processNavigationChange() {
           message: 'You have other uncommitted changes. Would you like to commit them first?',
           default: false,
         },
-      ])
+      ]);
       if (shouldCommitOthers) {
         const { commitMessageOthers } = await inquirer.default.prompt([
-          {
-            type: 'input',
-            name: 'commitMessageOthers',
-            message: 'Enter commit message for other changes:',
-          },
-        ])
+          { type: 'input', name: 'commitMessageOthers', message: 'Enter commit message for other changes:' },
+        ]);
         if (commitMessageOthers) {
-          await commitChanges(
-            commitMessageOthers,
-            otherUncommittedChanges.map((f) => f.path)
-          )
+          await commitChanges(commitMessageOthers, otherUncommittedChanges.map(f => f.path));
         } else {
-          console.log('No commit message provided. Aborting.')
-          isProcessing = false
-          return
+          console.log('No commit message provided. Aborting current operation.');
+          actionInProgress = false;
+          return;
         }
       } else {
-        console.log(
-          'Proceeding without committing other changes. Please be aware of potential conflicts.'
-        )
+        console.log('Proceeding without committing other changes. Please be aware of potential conflicts.');
       }
     }
 
-    // 2. User Confirmation to Start
-    const { confirmStart } = await inquirer.default.prompt([
-      {
-        type: 'confirm',
-        name: 'confirmStart',
-        message: `The following new screens will be generated: ${newScreens.map((s) => s.name).join(', ')}. Proceed?`,
-        default: true,
-      },
-    ])
-
-    if (!confirmStart) {
-      console.log('Operation cancelled by user.')
-      isProcessing = false
-      return
-    }
-
-    const generatedFilePaths = []
-    let allConfirmed = true
+    console.log(`Proceeding with generation for: ${newScreens.map(s => s.name).join(', ')}.`);
+    const generatedFilePaths = [];
+    let allOpsForBatchConfirmed = true;
 
     for (const screen of newScreens) {
       if (!screen.name || !screen.componentName || !screen.title) {
-        console.warn(`Skipping screen due to missing data: ${JSON.stringify(screen)}`)
-        continue
+          console.warn(`Skipping screen due to missing data: ${JSON.stringify(screen)}`);
+          continue;
       }
-      console.log(`\nProcessing new screen: ${screen.name}`)
-
-      // Generate files and collect paths
+      console.log(`\nProcessing new screen: ${screen.name}`);
+      // ... (Your existing loop for operations: generateFeatureScreen, generateExpoTabFile, etc.)
+      // Ensure each operation awaits inquirer.default.prompt and updates allOpsForBatchConfirmed
+      // For brevity, I'm omitting the detailed operations loop here, assuming it's similar to your previous version
+      // but now operates on `screen` from the `newScreens` array.
+      // Example operation:
+      // const { confirmOp } = await inquirer.default.prompt([...]);
+      // if (!confirmOp) { allOpsForBatchConfirmed = false; break; }
+      // await generateFeatureScreen(screen.name, screen.componentName, screen.title);
+      // generatedFilePaths.push(path.join(FEATURES_PATH, screen.name, 'screen.tsx'));
+      // ... and so on for other files and confirmation steps ...
       const operations = [
         {
           name: `Generate feature screen for ${screen.name}`,
-          action: () => generateFeatureScreen(screen.name, screen.componentName, screen.title),
+          action: async () => {
+            const p = await generateFeatureScreen(screen.name, screen.componentName, screen.title);
+            generatedFilePaths.push(p);
+          }
         },
         {
           name: `Generate Expo tab file for ${screen.name}`,
-          action: () => generateExpoTabFile(screen.name, screen.componentName),
+          action: async () => {
+            const p = await generateExpoTabFile(screen.name, screen.componentName);
+            generatedFilePaths.push(p);
+          }
         },
         {
           name: `Generate Next.js page file for ${screen.name}`,
-          action: () => generateNextPageFile(screen.name, screen.componentName),
+          action: async () => {
+            const p = await generateNextPageFile(screen.name, screen.componentName);
+            generatedFilePaths.push(p);
+          }
         },
         {
           name: `Add import for ${screen.componentName} to navigation config`,
           action: () => addImportToNavigationConfig(screen.componentName, screen.name),
-        },
-      ]
+        }
+      ];
 
       for (const op of operations) {
         const { confirmOp } = await inquirer.default.prompt([
           { type: 'confirm', name: 'confirmOp', message: `Confirm: ${op.name}?`, default: true },
-        ])
+        ]);
         if (!confirmOp) {
-          allConfirmed = false
-          console.log(`Operation "${op.name}" cancelled.`)
-          break
+          allOpsForBatchConfirmed = false;
+          console.log(`Operation "${op.name}" cancelled.`);
+          break;
         }
         try {
-          const filePath = await op.action() // Action might return a path or nothing
-          if (filePath && typeof filePath === 'string') {
-            // Only add if it's a file path
-            generatedFilePaths.push(filePath)
-          }
-          // For import, no file path is returned, so it's fine
+            await op.action();
         } catch (error) {
-          console.error(`Error during "${op.name}":`, error)
-          allConfirmed = false
-          break
+            console.error(`Error during "${op.name}":`, error);
+            allOpsForBatchConfirmed = false;
+            break;
         }
 
-        // Diff and confirm (simplified - real diffing is complex)
-        // For now, just a simple confirmation
-        // const { confirmAfterOp } = await inquirer.default.prompt([
-        //   {
-        //     type: 'confirm',
-        //     name: 'confirmAfterOp',
-        //     message: `"${op.name}" completed. Review and confirm to continue. (Undo will abort all changes for this screen).`,
-        //     default: true,
-        //   },
-        // ])
-        // if (!confirmAfterOp) {
-        //   allConfirmed = false
-        //   console.log(`User chose to undo after "${op.name}".`)
-        //   break
-        // }
-      }
+        const { confirmAfterOp } = await inquirer.default.prompt([
+          {
+            type: 'confirm',
+            name: 'confirmAfterOp',
+            message: `"${op.name}" completed. Review and confirm to continue. (Undo will abort all changes for this batch).`,
+            default: true,
+          },
+        ]);
+        if (!confirmAfterOp) {
+          allOpsForBatchConfirmed = false;
+          console.log(`User chose to undo after "${op.name}".`);
+          break;
+        }
+      } // end operation loop
 
-      if (!allConfirmed) break // If one screen's generation is cancelled, stop all.
-    }
+      if (!allOpsForBatchConfirmed) break; // Break from newScreens loop if any screen's ops are cancelled
+    } // end for (const screen of newScreens)
 
-    if (!allConfirmed) {
-      console.log('One or more operations were cancelled. Undoing generated files (if any)...')
-      // Basic undo: delete generated files. More complex undo might involve git reset.
+
+    if (!allOpsForBatchConfirmed) {
+      console.log('One or more operations were cancelled for the current batch. Undoing generated files...');
       for (const filePath of generatedFilePaths) {
         try {
           if (await fs.pathExists(filePath)) {
-            await fs.remove(filePath)
-            console.log(`Removed: ${filePath}`)
+            await fs.remove(filePath);
+            console.log(`Removed: ${filePath}`);
           }
         } catch (undoError) {
-          console.error(`Error undoing ${filePath}:`, undoError)
+          console.error(`Error undoing ${filePath}:`, undoError);
         }
       }
-      // Also, potentially revert changes to NAVIGATION_CONFIG_PATH if imports were added
-      console.log('Aborting further operations.')
-      isProcessing = false
-      return
+      // The import added to layout.tsx would need manual revert or more sophisticated undo.
+      console.log('Aborting operations for this batch. The changes in layout.tsx are still present and will be re-evaluated on next save.');
+      // We do NOT update lastAcknowledgedConfigState, so the same newScreens will be detected next time.
+      actionInProgress = false;
+      return;
     }
 
-    console.log('\nAll files generated successfully for new screens!')
+    console.log('\nAll files generated successfully for the new screen(s) in this batch!');
 
-    // 3. Final Confirmation and Commit
     const { confirmAllWork } = await inquirer.default.prompt([
-      {
-        type: 'confirm',
-        name: 'confirmAllWork',
-        message: 'All changes completed. Do they work as expected?',
-        default: true,
-      },
-    ])
+      { type: 'confirm', name: 'confirmAllWork', message: 'All changes completed for this batch. Do they work as expected?', default: true },
+    ]);
 
     if (confirmAllWork) {
       const { shouldCommitNew } = await inquirer.default.prompt([
-        {
-          type: 'confirm',
-          name: 'shouldCommitNew',
-          message: 'Would you like to commit these new files and changes?',
-          default: true,
-        },
-      ])
+        { type: 'confirm', name: 'shouldCommitNew', message: 'Would you like to commit these new files and changes?', default: true },
+      ]);
       if (shouldCommitNew) {
         const { commitMessageNew } = await inquirer.default.prompt([
-          {
-            type: 'input',
-            name: 'commitMessageNew',
-            message: 'Enter commit message for new screens:',
-          },
-        ])
+          { type: 'input', name: 'commitMessageNew', message: 'Enter commit message for new screens:' },
+        ]);
         if (commitMessageNew) {
-          // Add the generated files AND the modified navigation config
-          const filesToCommit = [...generatedFilePaths, NAVIGATION_CONFIG_PATH]
-          await commitChanges(commitMessageNew, filesToCommit.filter(Boolean)) // Filter out undefined/null
+          const filesToCommit = [...generatedFilePaths, NAVIGATION_CONFIG_PATH].filter(Boolean);
+          await commitChanges(commitMessageNew, filesToCommit);
         } else {
-          console.log('No commit message provided. New files are not committed.')
+          console.log('No commit message provided. New files are not committed.');
         }
       }
     } else {
-      console.log('User indicated changes might not be working. Please review and commit manually.')
-      // You might offer to undo here as well.
+      console.log('User indicated changes might not be working. Please review and commit manually. Generated files remain.');
     }
 
-    lastKnownConfigState = currentConfig // Update the state after successful processing
-    console.log('Job completed.')
+    lastAcknowledgedConfigState = currentConfig; // This batch is done and acknowledged.
+    console.log('Processing for the current batch of screens completed.');
+
   } catch (error) {
-    console.error('An error occurred during processing:', error)
+    console.error('An error occurred during the main processing sequence:', error);
+    // Potentially leave lastAcknowledgedConfigState as is, so it retries on next change.
   } finally {
-    isProcessing = false
+    actionInProgress = false;
   }
 }
 
 // --- Watcher Setup ---
-console.log(`Watching for changes in ${NAVIGATION_CONFIG_PATH}...`)
+console.log(`Watching for changes in ${NAVIGATION_CONFIG_PATH}...`);
 const watcher = chokidar.watch(NAVIGATION_CONFIG_PATH, {
   persistent: true,
-  ignoreInitial: true, // Don't run on startup
+  ignoreInitial: true,
   awaitWriteFinish: {
-    // Helps with rapid saves / autosave
-    stabilityThreshold: 1000, // Amount of time in milliseconds for a file size to remain stable before emitting an event
-    pollInterval: 100, // Interval in milliseconds to poll file size, if native event polling is not available.
-  },
-})
+    stabilityThreshold: 1500, // Wait 1.5 seconds after the last write to consider the file stable
+    pollInterval: 100
+  }
+});
 
-watcher.on('change', processNavigationChange)
-watcher.on('error', (error) => console.error(`Watcher error: ${error}`))
+watcher.on('change', onConfigFileChanged); // Use the new handler name
+watcher.on('error', error => console.error(`Watcher error: ${error}`));
 
-// Initialize lastKnownConfigState on startup
+// Initialize lastAcknowledgedConfigState on startup
 parseNavigationConfig(NAVIGATION_CONFIG_PATH)
-  .then((config) => {
-    lastKnownConfigState = config
-    console.log('Initial navigation config parsed and stored.')
+  .then(config => {
+    if (config) {
+      lastAcknowledgedConfigState = config;
+      console.log('Initial navigation config parsed and stored.');
+    } else {
+      console.error("Failed to parse initial config on startup. Please check the file.");
+    }
   })
-  .catch((err) => console.error('Failed to parse initial config:', err))
+  .catch(err => console.error("Error during initial config parse:", err));
 
-console.log('CLI tool started. Press Ctrl+C to exit.')
+console.log('CLI tool started. Press Ctrl+C to exit.');

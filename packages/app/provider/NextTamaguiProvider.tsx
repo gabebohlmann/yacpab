@@ -1,3 +1,4 @@
+// packages/app/provider/NextTamaguiProvider.tsx
 'use client'
 
 import '@tamagui/core/reset.css'

@@ -5,8 +5,6 @@ import { Text } from 'react-native' // For placeholder icon
 import { HomeScreen } from '../home/screen'
 import { AccountScreen } from '../account/screen'
 import { SettingsScreen } from '../settings/screen';
-import { FeedScreen } from '../feed/screen'
-
 // --- Configuration Types ---
 
 /**
@@ -134,21 +132,6 @@ export const appNavigationStructure: NavigatorLayout[] = [
             name: 'settings',
             component: SettingsScreen, // Assuming SettingsScreen is imported
             options: { title: 'Settings', tabBarIconName: 'settings' },
-          },
-          {
-            name: 'feed',
-            component: FeedScreen,
-            options: { title: 'Feed', tabBarIconName: 'feed' },
-          },
-          {
-            name: 'about',
-            component: AboutScreen,
-            options: { title: 'About', tabBarIconName: 'about' },
-          },
-          {
-            name: 'menu',
-            component: MenuScreen,
-            options: { title: 'Menu', tabBarIconName: 'menu' },
           },
         ],
       },

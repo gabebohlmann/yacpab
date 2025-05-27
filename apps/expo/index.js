@@ -1,7 +1,18 @@
-import 'setimmediate'
+// apps/expo/index.j
+import { registerRootComponent } from 'expo'
+import { ExpoRoot } from 'expo-router'
 
-if (!global?.setImmediate) {
-  global.setImmediate = setTimeout
+// Must be exported or Fast Refresh won't update the context
+export function App() {
+  const ctx = require.context('./app')
+  return <ExpoRoot context={ctx} />
 }
 
-import 'expo-router/entry'
+registerRootComponent(App)
+// import 'setimmediate'
+
+// if (!global?.setImmediate) {
+//   global.setImmediate = setTimeout
+// }
+
+// import 'expo-router/entry'

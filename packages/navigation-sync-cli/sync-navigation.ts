@@ -7,7 +7,14 @@ const inquirer = require('inquirer')
 const simpleGit = require('simple-git')
 const ts = require('typescript')
 
-const CWD = process.cwd() // Current Working Directory
+// Set CWD as MONOREPO ROOT
+const cliPackageDir = process.cwd() // Now this is /home/gabeb/Coding/yacpab/packages/navigation-sync-cli
+const MONOREPO_ROOT = path.resolve(cliPackageDir, '../..') // Go up two levels
+console.log('Deduced Monorepo Root:', MONOREPO_ROOT)
+const CWD = MONOREPO_ROOT
+
+// const CWD = process.cwd() // Current Working Directory
+// console.log(CWD)
 const git = simpleGit({ baseDir: CWD })
 
 const NAVIGATION_CONFIG_PATH = path.join(CWD, 'packages/app/features/navigation/layout.tsx')
@@ -335,7 +342,7 @@ async function processNavigationChange() {
     if (otherUncommittedChanges.length > 0) {
       console.log('Uncommitted changes found (excluding navigation config):')
       otherUncommittedChanges.forEach((f) => console.log(`  - ${f.path} (${f.working_dir})`))
-      const { shouldCommitOthers } = await inquirer.prompt([
+      const { shouldCommitOthers } = await inquirer.default.prompt([
         {
           type: 'confirm',
           name: 'shouldCommitOthers',
@@ -344,7 +351,7 @@ async function processNavigationChange() {
         },
       ])
       if (shouldCommitOthers) {
-        const { commitMessageOthers } = await inquirer.prompt([
+        const { commitMessageOthers } = await inquirer.default.prompt([
           {
             type: 'input',
             name: 'commitMessageOthers',
@@ -369,7 +376,7 @@ async function processNavigationChange() {
     }
 
     // 2. User Confirmation to Start
-    const { confirmStart } = await inquirer.prompt([
+    const { confirmStart } = await inquirer.default.prompt([
       {
         type: 'confirm',
         name: 'confirmStart',
@@ -415,7 +422,7 @@ async function processNavigationChange() {
       ]
 
       for (const op of operations) {
-        const { confirmOp } = await inquirer.prompt([
+        const { confirmOp } = await inquirer.default.prompt([
           { type: 'confirm', name: 'confirmOp', message: `Confirm: ${op.name}?`, default: true },
         ])
         if (!confirmOp) {
@@ -438,7 +445,7 @@ async function processNavigationChange() {
 
         // Diff and confirm (simplified - real diffing is complex)
         // For now, just a simple confirmation
-        const { confirmAfterOp } = await inquirer.prompt([
+        const { confirmAfterOp } = await inquirer.default.prompt([
           {
             type: 'confirm',
             name: 'confirmAfterOp',
@@ -478,7 +485,7 @@ async function processNavigationChange() {
     console.log('\nAll files generated successfully for new screens!')
 
     // 3. Final Confirmation and Commit
-    const { confirmAllWork } = await inquirer.prompt([
+    const { confirmAllWork } = await inquirer.default.prompt([
       {
         type: 'confirm',
         name: 'confirmAllWork',
@@ -488,7 +495,7 @@ async function processNavigationChange() {
     ])
 
     if (confirmAllWork) {
-      const { shouldCommitNew } = await inquirer.prompt([
+      const { shouldCommitNew } = await inquirer.default.prompt([
         {
           type: 'confirm',
           name: 'shouldCommitNew',
@@ -497,7 +504,7 @@ async function processNavigationChange() {
         },
       ])
       if (shouldCommitNew) {
-        const { commitMessageNew } = await inquirer.prompt([
+        const { commitMessageNew } = await inquirer.default.prompt([
           {
             type: 'input',
             name: 'commitMessageNew',

@@ -1,3 +1,5 @@
+// apps/expo/app/index.tsx
+
 import { HomeScreen } from 'app/features/home/screen'
 import { Stack } from 'expo-router'
 

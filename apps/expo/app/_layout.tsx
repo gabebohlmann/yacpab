@@ -1,3 +1,4 @@
+// apps/expo/app/_layout.tsx
 import { useEffect } from 'react'
 import { useColorScheme } from 'react-native'
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native'

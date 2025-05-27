@@ -1,4 +1,4 @@
-// Learn more https://docs.expo.dev/guides/monorepos
+// apps/expo/metro.config.js
 // Learn more https://docs.expo.io/guides/customizing-metro
 /**
  * @type {import('expo/metro-config')}

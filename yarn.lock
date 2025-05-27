@@ -13036,6 +13036,8 @@ __metadata:
     inquirer: "npm:^12.6.3"
     simple-git: "npm:^3.27.0"
     typescript: "npm:^5.8.3"
+  bin:
+    sync-nav: node ./sync-navigation.js
   languageName: unknown
   linkType: soft
 

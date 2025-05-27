@@ -12,6 +12,6 @@
     "@types/fs-extra": "^11"
   },
   "bin": {
-    "sync-nav": "node ./sync-navigation.js"
+    "sync-nav": "node ./sync-navigation.ts"
   }
 }

@@ -4,7 +4,7 @@ import { Text } from 'react-native' // For placeholder icon
 // Import shared screen components
 import { HomeScreen } from '../home/screen'
 import { AccountScreen } from '../account/screen'
-// Example: import { SettingsScreen } from '../settings/screen';
+import { SettingsScreen } from '../settings/screen';
 
 // --- Configuration Types ---
 
@@ -128,11 +128,11 @@ export const appNavigationStructure: NavigatorLayout[] = [
               tabBarIconName: 'person',
             },
           },
-          // {
-          //   name: 'settings',
-          //   component: SettingsScreen, // Assuming SettingsScreen is imported
-          //   options: { title: 'Settings', tabBarIconName: 'settings' },
-          // },
+          {
+            name: 'settings',
+            component: SettingsScreen, // Assuming SettingsScreen is imported
+            options: { title: 'Settings', tabBarIconName: 'settings' },
+          },
         ],
       },
       // Example of another stack screen outside tabs

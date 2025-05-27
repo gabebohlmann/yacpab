@@ -416,19 +416,19 @@ async function onConfigFileChanged() {
             break;
         }
 
-        const { confirmAfterOp } = await inquirer.default.prompt([
-          {
-            type: 'confirm',
-            name: 'confirmAfterOp',
-            message: `"${op.name}" completed. Review and confirm to continue. (Undo will abort all changes for this batch).`,
-            default: true,
-          },
-        ]);
-        if (!confirmAfterOp) {
-          allOpsForBatchConfirmed = false;
-          console.log(`User chose to undo after "${op.name}".`);
-          break;
-        }
+        // const { confirmAfterOp } = await inquirer.default.prompt([
+        //   {
+        //     type: 'confirm',
+        //     name: 'confirmAfterOp',
+        //     message: `"${op.name}" completed. Review and confirm to continue. (Undo will abort all changes for this batch).`,
+        //     default: true,
+        //   },
+        // ]);
+        // if (!confirmAfterOp) {
+        //   allOpsForBatchConfirmed = false;
+        //   console.log(`User chose to undo after "${op.name}".`);
+        //   break;
+        // }
       } // end operation loop
 
       if (!allOpsForBatchConfirmed) break; // Break from newScreens loop if any screen's ops are cancelled

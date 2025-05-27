@@ -97,15 +97,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body>
         <NextTamaguiProvider>
-          {/* Figure out TS error on ThemeProvider, goes away when specifying theme but theme breaks */}
-          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            <NavigationContainer theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-              <RootStackNavigator />
+          <NavigationContainer theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            {/* Figure out TS error on ThemeProvider, goes away when specifying theme but theme breaks */}
+            {/* <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}> */}
 
-              {/* children prop might not be needed here if NavigationContainer is the root view */}
-              {/* If you have content outside NavigationContainer, place it here. */}
-            </NavigationContainer>
-          </ThemeProvider>
+            <RootStackNavigator />
+
+            {/* children prop might not be needed here if NavigationContainer is the root view */}
+            {/* If you have content outside NavigationContainer, place it here. */}
+          </NavigationContainer>
+          {/* </ThemeProvider> */}
         </NextTamaguiProvider>
       </body>
     </html>

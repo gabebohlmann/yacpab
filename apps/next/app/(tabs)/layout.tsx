@@ -72,7 +72,7 @@ export default function TabsLayout() {
         },
         // Example of theme-dependent styling
         // tabBarActiveTintColor: colorScheme === 'dark' ? 'lightblue' : 'blue',
-        //TODO: Figure out why web has glitches with themeing, currently must start app and then comment out <Provider> in NextTamaguiProvider.tsx
+        //TODO: Figure out why web has glitches with themeing, currently must start app and then comment out <Provider> in NextTamaguiProvider.tsx              ,..,,,,,,,,
         // tabBarStyle: { backgroundColor: colorScheme === 'dark' ? '#121212' : '#FFFFFF' },
       })}
     >

@@ -428,19 +428,19 @@ async function processNavigationChange() {
 
         // Diff and confirm (simplified - real diffing is complex)
         // For now, just a simple confirmation
-        const { confirmAfterOp } = await inquirer.default.prompt([
-          {
-            type: 'confirm',
-            name: 'confirmAfterOp',
-            message: `"${op.name}" completed. Review and confirm to continue. (Undo will abort all changes for this screen).`,
-            default: true,
-          },
-        ])
-        if (!confirmAfterOp) {
-          allConfirmed = false
-          console.log(`User chose to undo after "${op.name}".`)
-          break
-        }
+        // const { confirmAfterOp } = await inquirer.default.prompt([
+        //   {
+        //     type: 'confirm',
+        //     name: 'confirmAfterOp',
+        //     message: `"${op.name}" completed. Review and confirm to continue. (Undo will abort all changes for this screen).`,
+        //     default: true,
+        //   },
+        // ])
+        // if (!confirmAfterOp) {
+        //   allConfirmed = false
+        //   console.log(`User chose to undo after "${op.name}".`)
+        //   break
+        // }
       }
 
       if (!allConfirmed) break // If one screen's generation is cancelled, stop all.

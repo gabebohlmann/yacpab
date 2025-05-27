@@ -23,8 +23,7 @@ const NEXT_APP_PATH = path.join(MONOREPO_ROOT, 'apps/next/app')
 
 let lastAcknowledgedConfigState = null
 let actionInProgress = false
-let ignoreNextConfigChange = false // This flag is set by addImportToNavigationConfig
-let aProgrammaticChangeJustHappened = false // New flag set by addImportToNavigationConfig
+let ignoreNextConfigChange = false
 
 function capitalizeFirstLetter(string) {
   return string.charAt(0).toUpperCase() + string.slice(1)
@@ -182,8 +181,23 @@ async function commitChanges(message, filesToAdd = []) {
 async function generateFeatureScreen(screenName, componentName, title) {
   const featurePath = path.join(FEATURES_PATH, screenName)
   const screenFilePath = path.join(featurePath, 'screen.tsx')
-  await fs.ensureDir(featurePath)
 
+  if (await fs.pathExists(screenFilePath)) {
+    const { overwrite } = await inquirer.default.prompt([
+      {
+        type: 'confirm',
+        name: 'overwrite',
+        message: `Feature screen file already exists: ${screenFilePath}. Overwrite?`,
+        default: false,
+      },
+    ])
+    if (!overwrite) {
+      console.log(`Skipped overwriting: ${screenFilePath}`)
+      return null // Indicate file was not written
+    }
+  }
+
+  await fs.ensureDir(featurePath)
   const content = `// packages/app/features/${screenName}/screen.tsx
 'use client';
 
@@ -214,8 +228,23 @@ export function ${componentName}() {
 async function generateExpoTabFile(screenName, componentName) {
   const expoTabDir = path.join(EXPO_APP_PATH, '(tabs)')
   const expoFilePath = path.join(expoTabDir, `${screenName}.tsx`)
-  await fs.ensureDir(expoTabDir)
 
+  if (await fs.pathExists(expoFilePath)) {
+    const { overwrite } = await inquirer.default.prompt([
+      {
+        type: 'confirm',
+        name: 'overwrite',
+        message: `Expo tab file already exists: ${expoFilePath}. Overwrite?`,
+        default: false,
+      },
+    ])
+    if (!overwrite) {
+      console.log(`Skipped overwriting: ${expoFilePath}`)
+      return null
+    }
+  }
+
+  await fs.ensureDir(expoTabDir) // Should already exist but good practice
   const content = `// apps/expo/app/(tabs)/${screenName}.tsx
 import { ${componentName} } from 'app/features/${screenName}/screen';
 
@@ -231,8 +260,27 @@ export default function ${capitalizeFirstLetter(screenName)}TabPage() {
 async function generateNextPageFile(screenName, componentName) {
   const nextPageDir = path.join(NEXT_APP_PATH, '(tabs)', screenName)
   const nextFilePath = path.join(nextPageDir, 'page.tsx')
-  await fs.ensureDir(nextPageDir)
 
+  if (await fs.pathExists(nextFilePath)) {
+    // Check if page.tsx exists
+    const { overwrite } = await inquirer.default.prompt([
+      {
+        type: 'confirm',
+        name: 'overwrite',
+        message: `Next.js page file already exists: ${nextFilePath}. Overwrite?`,
+        default: false,
+      },
+    ])
+    if (!overwrite) {
+      console.log(`Skipped overwriting: ${nextFilePath}`)
+      return null
+    }
+  } else if (await fs.pathExists(nextPageDir)) {
+    // Check if directory exists but page.tsx doesn't
+    console.log(`Directory ${nextPageDir} exists, but page.tsx will be created.`)
+  }
+
+  await fs.ensureDir(nextPageDir)
   const content = `// apps/next/app/(tabs)/${screenName}/page.tsx
 'use client';
 
@@ -250,7 +298,6 @@ export default function ${capitalizeFirstLetter(screenName)}Page() {
 async function addImportToNavigationConfig(componentName, screenName) {
   const relativePath = `../${screenName}/screen`
   const importStatement = `import { ${componentName} } from '${relativePath}';\n`
-  aProgrammaticChangeJustHappened = false // Reset before attempting
 
   try {
     let content = await fs.readFile(NAVIGATION_CONFIG_PATH, 'utf-8')
@@ -273,23 +320,19 @@ async function addImportToNavigationConfig(componentName, screenName) {
     }
 
     ignoreNextConfigChange = true
-    aProgrammaticChangeJustHappened = true // Signal that a write is about to happen
     await fs.writeFile(NAVIGATION_CONFIG_PATH, content)
     console.log(
       `Added import for ${componentName} to ${NAVIGATION_CONFIG_PATH}. Next direct change will be ignored.`
     )
-    // The delay here was an attempt to fix ordering, but a better fix is in the main loop
   } catch (error) {
     console.error(`Error adding import to ${NAVIGATION_CONFIG_PATH}:`, error)
     ignoreNextConfigChange = false
-    aProgrammaticChangeJustHappened = false
   }
 }
 
 async function onConfigFileChanged(changedPath) {
   if (changedPath === NAVIGATION_CONFIG_PATH && ignoreNextConfigChange) {
-    // TODO: Currently unable to print this because it comes up out of order after the next prompt
-    // console.log('Change to navigation config was programmatic, ignoring this event.')
+    // console.log('Change to navigation config was programmatic, ignoring this event.') // User commented this out
     ignoreNextConfigChange = false
     return
   }
@@ -380,7 +423,7 @@ async function onConfigFileChanged(changedPath) {
     }
 
     console.log(`Proceeding with generation for: ${newScreens.map((s) => s.name).join(', ')}.`)
-    const generatedFilePaths = []
+    const generatedFilePaths = [] // Store paths of files actually written or overwritten
     let allOpsForBatchConfirmed = true
 
     for (const screen of newScreens) {
@@ -391,7 +434,6 @@ async function onConfigFileChanged(changedPath) {
         continue
       }
       console.log(`\nProcessing new screen: ${screen.name}`)
-      aProgrammaticChangeJustHappened = false // Reset for each screen's operations
 
       const operations = [
         {
@@ -402,7 +444,7 @@ async function onConfigFileChanged(changedPath) {
               screen.componentName,
               screen.title || screen.name
             )
-            if (filePath) generatedFilePaths.push(filePath)
+            if (filePath) generatedFilePaths.push(filePath) // Only add if file was written
           },
         },
         {
@@ -423,6 +465,8 @@ async function onConfigFileChanged(changedPath) {
           name: `Add import for ${screen.componentName} to navigation config`,
           action: async () => {
             await addImportToNavigationConfig(screen.componentName, screen.name)
+            // This operation doesn't generate a new file path to add to generatedFilePaths for commit,
+            // but NAVIGATION_CONFIG_PATH is added to commit list later if changes occurred.
           },
         },
       ]
@@ -434,30 +478,25 @@ async function onConfigFileChanged(changedPath) {
         if (!confirmOp) {
           allOpsForBatchConfirmed = false
           console.log(`Operation "${op.name}" cancelled.`)
-          break
+          break // Stop operations for this screen
         }
         try {
           await op.action()
         } catch (error) {
           console.error(`Error during "${op.name}":`, error)
           allOpsForBatchConfirmed = false
-          break
+          break // Stop operations for this screen on error
         }
-      } // End of operations for one screen
-
-      if (!allOpsForBatchConfirmed) break // Break from processing newScreens loop
-
-      // After all operations for a screen (including potential import addition):
-      if (aProgrammaticChangeJustHappened) {
-        // If addImportToNavigationConfig was the last thing that happened and it wrote to the file
-        console.log('Pausing briefly to allow watcher to process programmatic change...')
-        await new Promise((resolve) => setTimeout(resolve, 100)) // Brief pause
-        aProgrammaticChangeJustHappened = false // Reset the flag
       }
-    } // End of for (const screen of newScreens)
 
-    if (!allOpsForBatchConfirmed) {
-      console.log('One or more operations were cancelled. Undoing generated files...')
+      if (!allOpsForBatchConfirmed) break // Stop processing further screens if current screen's ops were cancelled
+    }
+
+    if (!allOpsForBatchConfirmed && generatedFilePaths.length > 0) {
+      // Only undo if files were actually generated
+      console.log(
+        'One or more operations were cancelled. Undoing generated files for this batch...'
+      )
       for (const filePath of generatedFilePaths) {
         try {
           if (await fs.pathExists(filePath)) {
@@ -472,43 +511,58 @@ async function onConfigFileChanged(changedPath) {
         'Aborting operations for this batch. Programmatic changes to layout.tsx (if any) might need manual revert.'
       )
       actionInProgress = false
-      return
+      return // Exit processing for this detected change event
     }
 
-    console.log('\nAll files generated successfully for the new screen(s) in this batch!')
-    const { confirmAllWork } = await inquirer.default.prompt([
-      {
-        type: 'confirm',
-        name: 'confirmAllWork',
-        message: 'All changes completed. Do they work as expected?',
-        default: true,
-      },
-    ])
+    // If allOpsForBatchConfirmed is true, or it's false but no files were generated (e.g., user skipped all overwrites)
+    // we can proceed to the commit stage if there's anything to commit.
 
-    if (confirmAllWork) {
-      const { shouldCommitNew } = await inquirer.default.prompt([
+    if (generatedFilePaths.length > 0 || ignoreNextConfigChange) {
+      // Check if any file was written or import was added
+      console.log('\nFile generation/update process for this batch completed!')
+      const { confirmAllWork } = await inquirer.default.prompt([
         {
           type: 'confirm',
-          name: 'shouldCommitNew',
-          message: 'Commit these new files and changes?',
+          name: 'confirmAllWork',
+          message: 'All attempted changes for this batch are done. Do they work as expected?',
           default: true,
         },
       ])
-      if (shouldCommitNew) {
-        const { commitMessageNew } = await inquirer.default.prompt([
-          { type: 'input', name: 'commitMessageNew', message: 'Enter commit message:' },
+
+      if (confirmAllWork) {
+        const { shouldCommitNew } = await inquirer.default.prompt([
+          {
+            type: 'confirm',
+            name: 'shouldCommitNew',
+            message: 'Commit these changes?',
+            default: true,
+          },
         ])
-        if (commitMessageNew) {
-          const filesToCommit = [
-            ...new Set([...generatedFilePaths, NAVIGATION_CONFIG_PATH]),
-          ].filter(Boolean)
-          await commitChanges(commitMessageNew, filesToCommit)
-        } else {
-          console.log('No commit message. Not committing.')
+        if (shouldCommitNew) {
+          const { commitMessageNew } = await inquirer.default.prompt([
+            { type: 'input', name: 'commitMessageNew', message: 'Enter commit message:' },
+          ])
+          if (commitMessageNew) {
+            // Files to commit: generated files + navigation config if it was changed by adding an import
+            const filesToCommit = [
+              ...new Set([...generatedFilePaths, NAVIGATION_CONFIG_PATH]),
+            ].filter(Boolean)
+            if (filesToCommit.length > 0) {
+              await commitChanges(commitMessageNew, filesToCommit)
+            } else {
+              console.log('No files were generated or modified to commit.')
+            }
+          } else {
+            console.log('No commit message. Not committing.')
+          }
         }
+      } else {
+        console.log(
+          'User indicated changes might not be working. Please review and commit manually.'
+        )
       }
-    } else {
-      console.log('User indicated changes might not be working. Please review and commit manually.')
+    } else if (allOpsForBatchConfirmed) {
+      console.log('\nNo new files were generated (e.g., all existing files were skipped).')
     }
 
     lastAcknowledgedConfigState = currentConfig

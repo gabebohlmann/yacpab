@@ -57,9 +57,9 @@ export const NextTamaguiProvider = ({ children }: { children: ReactNode }) => {
         setTheme(next as any)
       }}
     >
-      <Provider disableRootThemeClass defaultTheme={theme || 'light'}>
+      {/* <Provider disableRootThemeClass defaultTheme={theme || 'light'}> */}
         {children}
-      </Provider>
+      {/* </Provider> */}
     </NextThemeProvider>
   )
 }

@@ -109,6 +109,7 @@ export const appNavigationStructure: NavigatorLayout[] = [
         tabScreenOptions: {
           // Default options for screens *inside* this TabNavigator
           headerShown: true, // Headers for 'index', 'account' screens will be shown by default
+            // Example: default header options for all tab screens
         },
         screens: [
           {

@@ -3087,7 +3087,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-navigation/native-stack@npm:^7.3.10, @react-navigation/native-stack@npm:^7.3.13":
+"@react-navigation/native-stack@npm:^7.3.10":
   version: 7.3.13
   resolution: "@react-navigation/native-stack@npm:7.3.13"
   dependencies:
@@ -3118,7 +3118,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-navigation/native@npm:^7.1.6, @react-navigation/native@npm:^7.1.8, @react-navigation/native@npm:^7.1.9":
+"@react-navigation/native@npm:^7.1.6, @react-navigation/native@npm:^7.1.8":
   version: 7.1.9
   resolution: "@react-navigation/native@npm:7.1.9"
   dependencies:
@@ -14173,7 +14173,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-native-screens@npm:^4.10.0, react-native-screens@npm:~4.10.0":
+"react-native-screens@npm:~4.10.0":
   version: 4.10.0
   resolution: "react-native-screens@npm:4.10.0"
   dependencies:
@@ -15362,16 +15362,12 @@ __metadata:
   dependencies:
     "@babel/runtime": "npm:^7.24.6"
     "@biomejs/biome": "npm:^1.9.3"
-    "@react-navigation/elements": "npm:^2.4.2"
-    "@react-navigation/native": "npm:^7.1.9"
-    "@react-navigation/native-stack": "npm:^7.3.13"
     "@tamagui/cli": "npm:^1.126.13"
     check-dependency-version-consistency: "npm:^4.1.0"
     eslint: "npm:^9.3.0"
     husky: "npm:^9.1.6"
     prettier: "npm:^3.3.3"
     react-native-safe-area-context: "npm:^5.4.1"
-    react-native-screens: "npm:^4.10.0"
     turbo: "npm:^1.13.4"
     typescript: "npm:~5.8.3"
     ultra-runner: "npm:^3.10.5"

@@ -54,9 +54,10 @@ export default function TabsLayout() {
   return (
     <Tab.Navigator
       initialRouteName={tabsConfig.initialRouteName}
+      {...tabsConfig.tabNavigatorOptions}
       screenOptions={({ route }) => ({
         // Global options from config
-        ...(tabsConfig.options as BottomTabNavigationOptions),
+        ...(tabsConfig.tabScreenOptions as BottomTabNavigationOptions),
         // Icon rendering logic
         tabBarIcon: ({ focused, color, size }) => {
           const screen = tabsConfig.screens.find((s) => s.name === route.name)
@@ -71,7 +72,8 @@ export default function TabsLayout() {
         },
         // Example of theme-dependent styling
         // tabBarActiveTintColor: colorScheme === 'dark' ? 'lightblue' : 'blue',
-        // tabBarStyle: { backgroundColor: colorScheme === 'dark' ? '#333' : '#FFF' },
+        //TODO: Figure out why web has glitches with themeing, currently must start app and then comment out <Provider> in NextTamaguiProvider.tsx
+        // tabBarStyle: { backgroundColor: colorScheme === 'dark' ? '#121212' : '#FFFFFF' },
       })}
     >
       {tabsConfig.screens.map((screenConfig: ScreenConfig) => {

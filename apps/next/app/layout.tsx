@@ -2,8 +2,13 @@
 'use client' // Required for Next.js App Router with client components
 
 import React, { useEffect } from 'react' // useEffect for potential client-side only logic
-import { useColorScheme } from 'react-native' // If you use this for theming
-import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native'
+import { useColorScheme, View } from 'react-native' // If you use this for theming
+import {
+  NavigationContainer,
+  DarkTheme,
+  DefaultTheme,
+  ThemeProvider,
+} from '@react-navigation/native'
 import {
   createNativeStackNavigator,
   NativeStackNavigationOptions,
@@ -92,11 +97,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body>
         <NextTamaguiProvider>
-          <NavigationContainer theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            <RootStackNavigator />
-            {/* children prop might not be needed here if NavigationContainer is the root view */}
-            {/* If you have content outside NavigationContainer, place it here. */}
-          </NavigationContainer>
+          {/* Figure out TS error on ThemeProvider, goes away when specifying theme but theme breaks */}
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <NavigationContainer theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+              <RootStackNavigator />
+
+              {/* children prop might not be needed here if NavigationContainer is the root view */}
+              {/* If you have content outside NavigationContainer, place it here. */}
+            </NavigationContainer>
+          </ThemeProvider>
         </NextTamaguiProvider>
       </body>
     </html>

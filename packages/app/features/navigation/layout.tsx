@@ -3,10 +3,7 @@ import { ComponentType } from 'react'
 import { Text } from 'react-native' // For placeholder icon
 import { HomeScreen } from '../home/screen'
 import { AccountScreen } from '../account/screen'
-import { SettingsScreen } from '../settings/screen'
-import { AboutScreen } from '../about/screen'
-import { ThreeScreen } from '../three/screen'
-import { FourScreen } from '../four/screen'
+import { SubsScreen } from '../subs/screen'
 export const isAutoSaveEnabled = true
 export const isEditing = false
 // --- Configuration Types ---
@@ -78,7 +75,7 @@ export const appNavigationStructure: NavigatorLayout[] = [
       {
         type: 'tabs',
         name: '(tabs)',
-        initialRouteName: 'index',
+        initialRouteName: 'home',
         stackScreenOptions: {
           // Options for how '(tabs)' group appears in 'Root' Stack
           headerShown: false, // Header for the '(tabs)' group itself is hidden
@@ -89,17 +86,17 @@ export const appNavigationStructure: NavigatorLayout[] = [
         },
         tabScreenOptions: {
           // Default options for screens *inside* this TabNavigator
-          headerShown: true, // Headers for 'index', 'account' screens will be shown by default
+          headerShown: false, // Headers for 'index', 'account' screens will be shown by default
           // Example: default header options for all tab screens
         },
         screens: [
           {
-            name: 'index',
+            name: 'home',
             component: HomeScreen,
             options: {
               title: 'Home',
               tabBarIconName: 'home',
-              // headerShown: false, // Example: could override tabScreenOptions.headerShown for this specific tab
+              headerShown: false, // Example: could override tabScreenOptions.headerShown for this specific tab
             },
           },
           {
@@ -108,41 +105,17 @@ export const appNavigationStructure: NavigatorLayout[] = [
             options: {
               title: 'Account',
               tabBarIconName: 'person',
+              headerShown: false,
             },
           },
           {
-            name: 'profile',
-            component: SettingsScreen,
-            options: { title: 'Settings', tabBarIconName: 'settings' },
-          },
-          {
-            name: 'info',
-            component: SettingsScreen,
-            options: { title: 'info', tabBarIconName: 'info' },
-          },
-          {
-            name: 'three',
-            component: ThreeScreen,
+            name: 'subs',
+            component: SubsScreen,
             options: {
-              title: 'Three',
-              tabBarIconName: 'three',
+              title: 'Subscriptions',
+              tabBarIconName: 'subscriptions',
+              headerShown: false,
             },
-          },
-          {
-            name: 'four',
-            component: FourScreen,
-            options: {
-              title: 'Four',
-              tabBarIconName: 'four',
-            },
-          },
-          {
-            name: 'five',
-            component: FiveScreen,
-            options: {
-              title: 'Five',
-              tabBarIconName: 'five',
-            }, 
           },
         ],
       },

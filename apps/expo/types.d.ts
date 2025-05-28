@@ -1,3 +1,4 @@
+// apps/expo/types.d.ts
 // apps/expo/app/types.d.ts
 import { config } from '@my/config'
 

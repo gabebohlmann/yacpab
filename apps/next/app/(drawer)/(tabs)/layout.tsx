@@ -1,4 +1,4 @@
-// apps/next/app/(tabs)/layout.tsx
+// apps/next/app/(drawer)/(tabs)/layout.tsx
 'use client'
 
 import React from 'react'

@@ -1,3 +1,4 @@
+// apps/next/next.config.js
 /** @type {import('next').NextConfig} */
 const { withTamagui } = require('@tamagui/next-plugin')
 const { join } = require('node:path')
@@ -41,6 +42,9 @@ module.exports = () => {
       'expo-linking',
       'expo-constants',
       'expo-modules-core',
+      'react-native-reanimated',
+      'react-native-gesture-handler',
+      '@react-navigation/native',
     ],
     experimental: {
       scrollRestoration: true,

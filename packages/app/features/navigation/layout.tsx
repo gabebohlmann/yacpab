@@ -1,4 +1,5 @@
 // packages/app/features/navigation/layout.tsx
+
 import { ComponentType } from 'react'
 import { Text } from 'react-native' // For placeholder icon
 import { HomeScreen } from '../home/screen'

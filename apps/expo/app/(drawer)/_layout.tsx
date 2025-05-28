@@ -1,5 +1,4 @@
 // apps/expo/app/(drawer)/_layout.tsx
-// apps/expo/app/(app)/_layout.tsx
 import { Drawer } from 'expo-router/drawer'
 import { useRouter, useNavigation, useSegments } from 'expo-router' // useSegments can be for logging/debugging now
 import { Pressable, Text } from 'react-native'

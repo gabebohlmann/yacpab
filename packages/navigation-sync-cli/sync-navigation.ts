@@ -467,7 +467,7 @@ async function generateNextPageFile(screenName, componentName, isUpdateOrRename 
   } else if ((await fs.pathExists(nextPageDir)) && !isUpdateOrRename && !autoConfirm) {
      // No specific prompt needed here if only dir exists, file will be created.
   }
-  await fs.ensureDir(nextPageDir) // ensureDir is fine even if it exists
+  await fs.ensureDir(nextPageDir) 
 
   const content = `// apps/next/app/(tabs)/${screenName}/page.tsx
 'use client';
@@ -771,9 +771,10 @@ async function processBatchOfChanges(configToProcessScreens) {
   if (actionInProgress) {
     console.warn('processBatchOfChanges called while actionInProgress was already true. This is unexpected.')
     reevaluateAfterCompletion = true
-    return
+    return false; // Return status
   }
-  actionInProgress = true
+  actionInProgress = true;
+  let astModifiedInThisBatch = false;
 
   try {
     const { newScreens, deletedScreens, updatedScreens, renamedScreens } = identifyChanges(
@@ -786,7 +787,7 @@ async function processBatchOfChanges(configToProcessScreens) {
     if (!hasAnyChanges) {
       console.log('No actionable screen changes to process relative to last acknowledged state.')
       lastAcknowledgedConfigState = { screens: configToProcessScreens }
-      actionInProgress = false; return
+      actionInProgress = false; return false;
     }
 
     let promptMessage = 'The following changes are detected based on your latest edits:\n'
@@ -800,7 +801,7 @@ async function processBatchOfChanges(configToProcessScreens) {
 
     if (!confirmProcessNow) {
       console.log('User chose not to process accumulated changes now. Will re-evaluate on next save or relevant event.')
-      actionInProgress = false; return
+      actionInProgress = false; return false;
     }
 
     let changesEffectivelyMade = false
@@ -838,12 +839,12 @@ async function processBatchOfChanges(configToProcessScreens) {
           fileDeletionOpsForThisScreen.push({op: () => deleteNextPage(screen.name), path: nextPageDir});
         }
         
-        itemsToDeleteMessages.push(`  - Entry for '${screen.name}' from navigation structure in layout.tsx`);
+        itemsToDeleteMessages.push(`  - Entry for '${screen.name}' from navigation structure in ${path.relative(MONOREPO_ROOT, NAVIGATION_CONFIG_PATH)}`);
         if (screen.componentName) {
-            itemsToDeleteMessages.push(`  - Import statement for '${screen.componentName}' from layout.tsx`);
+            itemsToDeleteMessages.push(`  - Import statement for '${screen.componentName}' in ${path.relative(MONOREPO_ROOT, NAVIGATION_CONFIG_PATH)}`);
         }
 
-        if (itemsToDeleteMessages.length > 0) {
+        if (itemsToDeleteMessages.length > 0) { // If files to delete OR AST changes to make
           console.log("\nThe following items are associated with this screen and are targeted for deletion/removal:");
           itemsToDeleteMessages.forEach(msg => console.log(msg));
 
@@ -871,7 +872,9 @@ async function processBatchOfChanges(configToProcessScreens) {
             console.log(`Skipped deletions/removals for screen '${screen.name}'.`);
           }
         } else {
-          console.log(`No files found for screen '${screen.name}', but will ensure it's removed from layout.tsx structure and imports if it was listed for deletion.`);
+          // This case means the screen was in deletedScreens but had no files and no componentName (unlikely if parsed correctly)
+          // Still, if it's in deletedScreens, it means it should be removed from the AST structure.
+          console.log(`No associated files found for screen '${screen.name}', but its entry and import (if any) will be removed from layout.tsx as requested.`);
           astModificationsBatch.screenNamesToDelete.push({ name: screen.name });
           if (screen.componentName) {
              astModificationsBatch.importsToRemove.push({ componentName: screen.componentName });
@@ -885,7 +888,6 @@ async function processBatchOfChanges(configToProcessScreens) {
     }
     
     // --- Handle Renames ---
-    // (For renames, AST changes would involve removing old, adding new for structure and imports)
     if (renamedScreens.length > 0) {
         for (const { oldScreen, newScreen } of renamedScreens) {
             console.log(`\nProcessing RENAME for '${oldScreen.name}' to '${newScreen.name}'`);
@@ -919,7 +921,6 @@ async function processBatchOfChanges(configToProcessScreens) {
     }
     
     // --- Handle Updates ---
-    // (For updates, if componentName changes, it's like an import removal and addition)
     if (updatedScreens.length > 0) {
         for (const { oldScreen, newScreen } of updatedScreens) { 
             console.log(`\nProcessing UPDATE for screen: ${newScreen.name}`);
@@ -941,14 +942,14 @@ async function processBatchOfChanges(configToProcessScreens) {
                     if (oldScreen.componentName) astModificationsBatch.importsToRemove.push({ componentName: oldScreen.componentName });
                     astModificationsBatch.importsToAdd.push({ componentName: newScreen.componentName, screenName: newScreen.name });
                 }
-                // Screen entry in structure itself might need an update if componentName changed,
-                // but simpler to delete old and add new if these properties changed in AST.
-                // For now, modifyLayoutFileWithAst for add/delete handles the structure. If componentName changed,
-                // the existing entry for screen.name will be updated by the add logic if it detects only component differs.
-                // However, a more robust way is to explicitly update. For simplicity now, we rely on delete old screen (if name changed, handled by rename)
-                // or newScreen details will be used by generate logic. The current AST add will NOT update if screen name exists.
-                // This requires a dedicated AST update mechanism not just add/delete.
-                // For now, the file regeneration is the primary effect. AST for title/icon changes is not handled by modifyLayoutFileWithAst's add/delete.
+                // If only title/icon changed, AST for screen structure also needs update.
+                // Current modifyLayoutFileWithAst will add newScreen if its `name` is not found.
+                // If name exists but other props changed, it won't update unless explicitly handled.
+                // For simplicity, if a screen is in updatedScreens, we can remove the old and add the new.
+                // This ensures title/icon in AST options are updated too.
+                astModificationsBatch.screenNamesToDelete.push({name: oldScreen.name});
+                astModificationsBatch.screensToAdd.push({name: newScreen.name, componentName: newScreen.componentName, title: newScreen.title, icon: newScreen.icon});
+
                 changesEffectivelyMade = true;
             } else {
                  console.log(`Skipped file regeneration for update of '${newScreen.name}'.`);
@@ -990,18 +991,17 @@ async function processBatchOfChanges(configToProcessScreens) {
         astModificationsBatch.importsToRemove.length > 0) {
         console.log("\nApplying all confirmed changes to layout.tsx...");
         await modifyLayoutFileWithAst(astModificationsBatch);
-        changesEffectivelyMade = true; // Ensure this is true if AST was touched
+        astModifiedInThisBatch = true; 
+        changesEffectivelyMade = true; 
     }
 
-
     if (changesEffectivelyMade || ignoreNextConfigChange) { 
-      // Important: After potential AST modification, re-parse to get the true current state for lastAcknowledgedConfigState
       const finalLayoutState = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
       if (finalLayoutState && finalLayoutState.screens) {
         lastAcknowledgedConfigState = { screens: finalLayoutState.screens };
       } else {
         console.warn("Could not re-parse layout.tsx after AST changes; lastAcknowledgedConfigState might be stale.");
-        lastAcknowledgedConfigState = { screens: configToProcessScreens }; // Fallback
+        lastAcknowledgedConfigState = { screens: configToProcessScreens }; 
       }
       console.log("Snapshot `lastAcknowledgedConfigState` updated with latest from layout.tsx.");
       
@@ -1013,7 +1013,7 @@ async function processBatchOfChanges(configToProcessScreens) {
           {
             type: 'confirm',
             name: 'confirmCommit',
-            message: `Commit ${uniqueFiles.length} updated/generated/deleted file(s) related to navigation changes?`,
+            message: `Git Commit ${uniqueFiles.length} updated/generated/deleted file(s) related to navigation changes?`,
             default: true,
           },
         ])
@@ -1032,6 +1032,7 @@ async function processBatchOfChanges(configToProcessScreens) {
       setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
     }
   }
+  return astModifiedInThisBatch;
 }
 
 // --- Project Consistency Validation ---
@@ -1114,6 +1115,7 @@ async function validateProjectConsistency(declaredScreens, layoutSourceFile, isI
   let fixesAppliedThisRun = false;
   let astModifiedThisRun = false;
   const proposedFixes = []; 
+  const layoutRelativePath = path.relative(MONOREPO_ROOT, NAVIGATION_CONFIG_PATH);
 
   if (!declaredScreens || !layoutSourceFile) {
     console.error("Validation error: Missing declaredScreens or layoutSourceFile.");
@@ -1157,7 +1159,7 @@ async function validateProjectConsistency(declaredScreens, layoutSourceFile, isI
     const hasCorrectImport = actualImports.some(imp => imp.componentName === screen.componentName && imp.screenName === screen.name);
     if (!hasCorrectImport) {
       proposedFixes.push({
-        description: `Screen '${screen.name}': Missing import for component '${screen.componentName}'.`,
+        description: `Screen '${screen.name}': Missing import for component '${screen.componentName}' in ${layoutRelativePath}.`,
         type: 'ast', fixType: 'add_import', screenData: { componentName: screen.componentName, screenName: screen.name }
       });
     }
@@ -1192,7 +1194,7 @@ async function validateProjectConsistency(declaredScreens, layoutSourceFile, isI
     const isUsedByDeclaredScreen = declaredScreens.some(s => s.componentName === imp.componentName && s.name === imp.screenName);
     if (!isUsedByDeclaredScreen) {
       proposedFixes.push({
-        description: `Orphaned import: Component '${imp.componentName}' from '../${imp.screenName}/screen'.`,
+        description: `Orphaned import: Component '${imp.componentName}' from '../${imp.screenName}/screen' in ${layoutRelativePath}.`,
         type: 'ast', fixType: 'remove_import', screenData: { componentName: imp.componentName, screenName: imp.screenName }
       });
     }
@@ -1297,7 +1299,11 @@ async function onConfigFileChanged(changedPath) {
     return
   }
 
-  let { screens: currentScreensFromFile, isAutoSaveOn, isEditing, commandsToExecute, sourceFile: currentSourceFile } = parsedResult
+  let currentScreensFromFile = parsedResult.screens;
+  // let currentSourceFile = parsedResult.sourceFile; // sourceFile is part of parsedResult
+  let astModifiedByCommands = false;
+
+  const { isAutoSaveOn, isEditing, commandsToExecute } = parsedResult;
   console.log(`Parsed flags from file: isAutoSaveOn=${isAutoSaveOn}, isEditing=${isEditing}`)
   const hasPendingCliCommands = commandsToExecute && (commandsToExecute.add?.length > 0 || commandsToExecute.delete?.length > 0)
 
@@ -1324,8 +1330,7 @@ async function onConfigFileChanged(changedPath) {
       editingModeActive = false
     }
   }
-
-  let astActuallyModifiedByCommands = false;
+  
   if (hasPendingCliCommands) {
     console.log('Applying commands from `commandsToExecute` in layout.tsx...')
     
@@ -1353,7 +1358,7 @@ async function onConfigFileChanged(changedPath) {
       clearCommands: true,
     };
 
-    const currentParsedForCmds = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+    const currentParsedForCmds = await parseNavigationConfig(NAVIGATION_CONFIG_PATH); // Use fresh parse here
     if (currentParsedForCmds && currentParsedForCmds.screens) {
       actionsForAst.importsToRemove = (commandsToExecute.delete || [])
         .map((cmdToDelete) => {
@@ -1367,24 +1372,26 @@ async function onConfigFileChanged(changedPath) {
     
     if (actionsForAst.screensToAdd.length > 0 || actionsForAst.screenNamesToDelete.length > 0 || actionsForAst.importsToAdd.length > 0 || actionsForAst.importsToRemove.length > 0) {
         await modifyLayoutFileWithAst(actionsForAst);
-        astActuallyModifiedByCommands = true;
-        parsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH); 
-        if (!parsedResult || !parsedResult.screens) {
+        astModifiedByCommands = true;
+        const newParsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+        if (newParsedResult) {
+            parsedResult = newParsedResult; 
+            currentScreensFromFile = newParsedResult.screens;
+            // currentSourceFile updated via parsedResult
+        } else {
           console.error('Failed to re-parse layout.tsx after applying commands. Aborting further processing.');
           return;
         }
-        currentScreensFromFile = parsedResult.screens;
-        currentSourceFile = parsedResult.sourceFile; 
-        lastAcknowledgedConfigState = { screens: currentScreensFromFile };
+        lastAcknowledgedConfigState = { screens: currentScreensFromFile }; 
         console.log("Applied commands from layout.tsx and updated internal state.");
     } else if (actionsForAst.clearCommands && (commandsToExecute.add?.length > 0 || commandsToExecute.delete?.length > 0)) {
         console.log("Clearing empty or ineffective commandsToExecute from layout.tsx.");
         await modifyLayoutFileWithAst({ clearCommands: true });
-        astActuallyModifiedByCommands = true;
-         parsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH); 
-        if (parsedResult) { 
-             currentScreensFromFile = parsedResult.screens;
-             currentSourceFile = parsedResult.sourceFile;
+        astModifiedByCommands = true;
+        const newParsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH); 
+        if (newParsedResult) {
+             parsedResult = newParsedResult;
+             currentScreensFromFile = newParsedResult.screens;
              lastAcknowledgedConfigState = { screens: currentScreensFromFile };
         }
     } else {
@@ -1392,30 +1399,33 @@ async function onConfigFileChanged(changedPath) {
     }
   }
 
-  await processBatchOfChanges(currentScreensFromFile);
+  const astModifiedByBatch = await processBatchOfChanges(currentScreensFromFile);
+  const astModifiedThisCycle = astModifiedByCommands || astModifiedByBatch;
+  
+  console.log("Running post-change consistency validation...");
+  let configForValidation = parsedResult; // Start with the most recent full parsed result we have
+  if (astModifiedThisCycle) { // If any AST modification definitely happened in this full cycle
+      const freshConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+      if (freshConfig) {
+          configForValidation = freshConfig;
+      } else {
+          console.warn("Could not re-parse for validation after potential AST modifications in the cycle.");
+      }
+  }
 
-  if (!actionInProgress) { 
-    console.log("Running post-change consistency validation...");
-    const latestConfigForValidation = (astActuallyModifiedByCommands || (changedPath === NAVIGATION_CONFIG_PATH && !ignoreNextConfigChange))
-                                      ? await parseNavigationConfig(NAVIGATION_CONFIG_PATH) 
-                                      : parsedResult; 
-
-    if (latestConfigForValidation && latestConfigForValidation.screens && latestConfigForValidation.sourceFile) {
-        const validationResult = await validateProjectConsistency(latestConfigForValidation.screens, latestConfigForValidation.sourceFile);
-        if (validationResult.astModified) {
-            const finalConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
-            if (finalConfig && finalConfig.screens) {
-                lastAcknowledgedConfigState = { screens: finalConfig.screens };
-            }
-        } else if (validationResult.fixesApplied) { 
-             const finalConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
-            if (finalConfig && finalConfig.screens) {
-                lastAcknowledgedConfigState = { screens: finalConfig.screens };
-            }
-        }
-    } else {
-        console.warn("Could not get latest config for post-change validation. Parsed result:", latestConfigForValidation);
-    }
+  if (configForValidation && configForValidation.screens && configForValidation.sourceFile) {
+      const validationResult = await validateProjectConsistency(configForValidation.screens, configForValidation.sourceFile);
+      if (validationResult.astModified || validationResult.fixesApplied) { 
+          const finalConfigAfterValidation = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+          if (finalConfigAfterValidation && finalConfigAfterValidation.screens) {
+              lastAcknowledgedConfigState = { screens: finalConfigAfterValidation.screens };
+              console.log("Refreshed lastAcknowledgedConfigState after validation fixes.");
+          }
+      } else { // Validator made no changes, but previous steps might have. Ensure baseline is up-to-date.
+           lastAcknowledgedConfigState = { screens: configForValidation.screens };
+      }
+  } else {
+      console.warn("Could not obtain suitable config for post-change validation.");
   }
 }
 
@@ -1464,11 +1474,14 @@ async function main() {
     if (postCliConfig && postCliConfig.screens && postCliConfig.sourceFile) {
         console.log("Running post-CLI command consistency validation...");
         const validationResult = await validateProjectConsistency(postCliConfig.screens, postCliConfig.sourceFile);
+        // Update lastAcknowledgedConfigState if validator made changes
         if (validationResult.astModified || validationResult.fixesApplied) {
              const finalConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
              if (finalConfig && finalConfig.screens) {
                 lastAcknowledgedConfigState = { screens: finalConfig.screens };
-            }
+             }
+        } else { // If validator didn't make changes, ensure it's based on postCliConfig
+            lastAcknowledgedConfigState = { screens: postCliConfig.screens };
         }
     } else {
         console.warn("Could not get latest config for post-CLI validation.");
@@ -1563,7 +1576,7 @@ async function handleDirectCliCommands(command, screenNames) {
           continue
         }
         console.log(`\nDetails of screen to delete: ${JSON.stringify(screenToDelete, null, 2)}`)
-        const { confirmDelete } = await inquirer.default.prompt([{type: 'confirm',name: 'confirmDelete',message: `Confirm removal of screen '${screenNameToDelete}' from layout.tsx?`,default: true,},])
+        const { confirmDelete } = await inquirer.default.prompt([{type: 'confirm',name: 'confirmDelete',message: `Confirm removal of screen '${screenNameToDelete}' from layout.tsx (structure and import)?`,default: true,},])
         if (!confirmDelete) {
           console.log(`Skipped AST removal of '${screenNameToDelete}'.`)
           continue
@@ -1589,7 +1602,7 @@ async function handleDirectCliCommands(command, screenNames) {
     const finalParsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
     if (finalParsedResult && finalParsedResult.screens) {
       lastAcknowledgedConfigState = { screens: initialParsed.screens }; 
-      await processBatchOfChanges(finalParsedResult.screens);
+      await processBatchOfChanges(finalParsedResult.screens); // This function now returns astModifiedInThisBatch
     } else {
       console.error('Failed to parse config after CLI command. Aborting file processing.')
     }

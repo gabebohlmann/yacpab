@@ -808,33 +808,64 @@ async function processBatchOfChanges(configToProcessScreens) {
     let changesEffectivelyMade = false
     const allGeneratedOrModifiedFiles = new Set();
 
+    // --- Handle Deletions ---
     if (deletedScreens.length > 0) {
-      const deletedFilePaths = [];
+      const filesActuallyDeletedInBatch = new Set(); // Track files deleted in this specific batch run
       for (const screen of deletedScreens) {
-        console.log(`\nProcessing DELETION for screen: ${screen.name} (Component: ${screen.componentName})`)
-        const { confirmDeleteOps } = await inquirer.default.prompt([{
-            type: 'confirm',
-            name: 'confirmDeleteOps',
-            message: `Confirm deletion of ALL associated files for screen '${screen.name}'?`,
-            default: true,
-        }]);
-        if (confirmDeleteOps) {
-            const paths = await Promise.all([
-                deleteFeature(screen.name),
-                deleteExpoTabFile(screen.name),
-                deleteNextPage(screen.name)
-            ]);
-            paths.filter(p => p).forEach(p => deletedFilePaths.push(p));
-            if (paths.some(p => p)) changesEffectivelyMade = true;
-        } else {
+        console.log(`\nProcessing DELETION for screen: ${screen.name} (Component: ${screen.componentName})`);
+
+        const featurePath = path.join(FEATURES_PATH, screen.name);
+        const expoFilePath = path.join(EXPO_APP_PATH, '(tabs)', `${screen.name}.tsx`);
+        const nextPageDir = path.join(NEXT_APP_PATH, '(tabs)', screen.name);
+
+        const filesToDeleteMessages = [];
+        const existingFilesForThisScreen = [];
+
+        if (await fs.pathExists(featurePath)) {
+          filesToDeleteMessages.push(`  - Feature directory: ${featurePath}`);
+          existingFilesForThisScreen.push({ type: 'feature', path: featurePath, action: () => deleteFeature(screen.name) });
+        }
+        if (await fs.pathExists(expoFilePath)) {
+          filesToDeleteMessages.push(`  - Expo tab file: ${expoFilePath}`);
+          existingFilesForThisScreen.push({ type: 'expo', path: expoFilePath, action: () => deleteExpoTabFile(screen.name) });
+        }
+        if (await fs.pathExists(nextPageDir)) {
+          filesToDeleteMessages.push(`  - Next.js page directory: ${nextPageDir}`);
+          existingFilesForThisScreen.push({ type: 'next', path: nextPageDir, action: () => deleteNextPage(screen.name) });
+        }
+
+        if (existingFilesForThisScreen.length > 0) {
+          console.log("\nThe following files/directories are associated with this screen and are targeted for deletion:");
+          filesToDeleteMessages.forEach(msg => console.log(msg));
+
+          const { confirmDeleteOps } = await inquirer.default.prompt([{
+              type: 'confirm',
+              name: 'confirmDeleteOps',
+              message: `Confirm deletion of these ${existingFilesForThisScreen.length} item(s) for screen '${screen.name}'?`,
+              default: true,
+          }]);
+
+          if (confirmDeleteOps) {
+            for (const fileOp of existingFilesForThisScreen) {
+              const deletedPath = await fileOp.action();
+              if (deletedPath) {
+                filesActuallyDeletedInBatch.add(deletedPath);
+                allGeneratedOrModifiedFiles.add(deletedPath); // For overall commit
+              }
+            }
+            if (filesActuallyDeletedInBatch.size > 0) changesEffectivelyMade = true;
+          } else {
             console.log(`Skipped file deletions for screen '${screen.name}'.`);
+          }
+        } else {
+          console.log(`No associated files found to delete for screen '${screen.name}'.`);
         }
       }
-      if (deletedFilePaths.length > 0) {
-        deletedFilePaths.forEach(p => allGeneratedOrModifiedFiles.add(p));
-        console.log('\nDeletion of files completed for this batch!')
+      if (filesActuallyDeletedInBatch.size > 0) {
+        console.log('\nDeletion of files completed for this batch session!');
       }
     }
+
 
     if (renamedScreens.length > 0) {
         for (const { oldScreen, newScreen } of renamedScreens) {
@@ -992,7 +1023,6 @@ async function getExistingExpoTabs() {
   try {
     const items = await fs.readdir(expoTabsDir);
     for (const item of items) {
-      // FIX: Ignore _layout.tsx
       if (item.endsWith('.tsx') && item !== '_layout.tsx') {
         tabs.add(item.replace('.tsx', ''));
       }

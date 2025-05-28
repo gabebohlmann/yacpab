@@ -150,7 +150,7 @@ async function parseNavigationConfig(filePath) {
       fileContent,
       ts.ScriptTarget.ESNext,
       true,
-      ts.ScriptKind.TSX // Ensure it parses TSX for layout.tsx
+      ts.ScriptKind.TSX 
     )
 
     let isAutoSaveOn = false
@@ -355,7 +355,7 @@ async function commitChanges(message, filesToAdd = []) {
       path.isAbsolute(f) ? f : path.join(MONOREPO_ROOT, f)
     )
     if (absoluteFilesToAdd.length > 0) {
-      await git.add(absoluteFilesToAdd.filter(f => fs.existsSync(f))) // Only add existing files
+      await git.add(absoluteFilesToAdd.filter(f => fs.existsSync(f))) 
     } else {
       console.warn('Commit called with no specific files to add.')
     }
@@ -526,7 +526,7 @@ async function renameFeatureDirectory(oldName, newName) {
       )
       return null
     }
-    await fs.move(oldPath, newPath) // Use fs.move for robustness
+    await fs.move(oldPath, newPath) 
     console.log(`Renamed feature directory from ${oldPath} to ${newPath}`)
     return newPath
   }
@@ -594,7 +594,7 @@ async function modifyLayoutFileWithAst(actions) {
               let currentScreenElements = [...tabsScreensArrayNodeOriginal.elements]
 
               if (actions.screenNamesToDelete && actions.screenNamesToDelete.length > 0) {
-                const namesToDelete = new Set(actions.screenNamesToDelete.map((s) => s.name)) // s.name is expected
+                const namesToDelete = new Set(actions.screenNamesToDelete.map((s) => s.name)) 
                 currentScreenElements = currentScreenElements.filter((elNode) => {
                   if (ts.isObjectLiteralExpression(elNode)) {
                     const nameProp = elNode.properties.find(
@@ -716,7 +716,6 @@ async function modifyLayoutFileWithAst(actions) {
 
                 if (newElements.length === 0) {
                   console.log(`AST: Prepared removal of entire import declaration for: ${originalElements.map(e => e.name.text).join(', ')}.`);
-                  // Skip adding this importDecl to newExistingImports
                   continue;
                 } else if (newElements.length < originalElements.length) {
                   console.log(`AST: Prepared removal of specific component(s) from import declaration. Kept: ${newElements.map(e => e.name.text).join(', ')}`);
@@ -731,7 +730,6 @@ async function modifyLayoutFileWithAst(actions) {
             existingImports = newExistingImports;
           }
         }
-
 
         if (actions.importsToAdd && actions.importsToAdd.length > 0) {
           actions.importsToAdd.forEach((imp) => {
@@ -807,10 +805,16 @@ async function processBatchOfChanges(configToProcessScreens) {
 
     let changesEffectivelyMade = false
     const allGeneratedOrModifiedFiles = new Set();
+    const astModificationsBatch = { 
+        screensToAdd: [], 
+        screenNamesToDelete: [], 
+        importsToAdd: [], 
+        importsToRemove: [] 
+    };
 
     // --- Handle Deletions ---
     if (deletedScreens.length > 0) {
-      const filesActuallyDeletedInBatch = new Set(); // Track files deleted in this specific batch run
+      const filesActuallyDeletedInThisBlock = new Set();
       for (const screen of deletedScreens) {
         console.log(`\nProcessing DELETION for screen: ${screen.name} (Component: ${screen.componentName})`);
 
@@ -818,62 +822,77 @@ async function processBatchOfChanges(configToProcessScreens) {
         const expoFilePath = path.join(EXPO_APP_PATH, '(tabs)', `${screen.name}.tsx`);
         const nextPageDir = path.join(NEXT_APP_PATH, '(tabs)', screen.name);
 
-        const filesToDeleteMessages = [];
-        const existingFilesForThisScreen = [];
+        const itemsToDeleteMessages = [];
+        const fileDeletionOpsForThisScreen = [];
 
         if (await fs.pathExists(featurePath)) {
-          filesToDeleteMessages.push(`  - Feature directory: ${featurePath}`);
-          existingFilesForThisScreen.push({ type: 'feature', path: featurePath, action: () => deleteFeature(screen.name) });
+          itemsToDeleteMessages.push(`  - Feature directory: ${featurePath}`);
+          fileDeletionOpsForThisScreen.push({op: () => deleteFeature(screen.name), path: featurePath});
         }
         if (await fs.pathExists(expoFilePath)) {
-          filesToDeleteMessages.push(`  - Expo tab file: ${expoFilePath}`);
-          existingFilesForThisScreen.push({ type: 'expo', path: expoFilePath, action: () => deleteExpoTabFile(screen.name) });
+          itemsToDeleteMessages.push(`  - Expo tab file: ${expoFilePath}`);
+          fileDeletionOpsForThisScreen.push({op: () => deleteExpoTabFile(screen.name), path: expoFilePath});
         }
         if (await fs.pathExists(nextPageDir)) {
-          filesToDeleteMessages.push(`  - Next.js page directory: ${nextPageDir}`);
-          existingFilesForThisScreen.push({ type: 'next', path: nextPageDir, action: () => deleteNextPage(screen.name) });
+          itemsToDeleteMessages.push(`  - Next.js page directory: ${nextPageDir}`);
+          fileDeletionOpsForThisScreen.push({op: () => deleteNextPage(screen.name), path: nextPageDir});
+        }
+        
+        itemsToDeleteMessages.push(`  - Entry for '${screen.name}' from navigation structure in layout.tsx`);
+        if (screen.componentName) {
+            itemsToDeleteMessages.push(`  - Import statement for '${screen.componentName}' from layout.tsx`);
         }
 
-        if (existingFilesForThisScreen.length > 0) {
-          console.log("\nThe following files/directories are associated with this screen and are targeted for deletion:");
-          filesToDeleteMessages.forEach(msg => console.log(msg));
+        if (itemsToDeleteMessages.length > 0) {
+          console.log("\nThe following items are associated with this screen and are targeted for deletion/removal:");
+          itemsToDeleteMessages.forEach(msg => console.log(msg));
 
           const { confirmDeleteOps } = await inquirer.default.prompt([{
               type: 'confirm',
               name: 'confirmDeleteOps',
-              message: `Confirm deletion of these ${existingFilesForThisScreen.length} item(s) for screen '${screen.name}'?`,
+              message: `Confirm deletion/removal of ALL ${itemsToDeleteMessages.length} listed item(s) for screen '${screen.name}'?`,
               default: true,
           }]);
 
           if (confirmDeleteOps) {
-            for (const fileOp of existingFilesForThisScreen) {
-              const deletedPath = await fileOp.action();
-              if (deletedPath) {
-                filesActuallyDeletedInBatch.add(deletedPath);
-                allGeneratedOrModifiedFiles.add(deletedPath); // For overall commit
-              }
+            for (const fileOp of fileDeletionOpsForThisScreen) {
+                const deletedPath = await fileOp.op(); 
+                if (deletedPath) {
+                    filesActuallyDeletedInThisBlock.add(deletedPath);
+                    allGeneratedOrModifiedFiles.add(deletedPath);
+                }
             }
-            if (filesActuallyDeletedInBatch.size > 0) changesEffectivelyMade = true;
+            astModificationsBatch.screenNamesToDelete.push({ name: screen.name });
+            if (screen.componentName) {
+                astModificationsBatch.importsToRemove.push({ componentName: screen.componentName });
+            }
+            changesEffectivelyMade = true;
           } else {
-            console.log(`Skipped file deletions for screen '${screen.name}'.`);
+            console.log(`Skipped deletions/removals for screen '${screen.name}'.`);
           }
         } else {
-          console.log(`No associated files found to delete for screen '${screen.name}'.`);
+          console.log(`No files found for screen '${screen.name}', but will ensure it's removed from layout.tsx structure and imports if it was listed for deletion.`);
+          astModificationsBatch.screenNamesToDelete.push({ name: screen.name });
+          if (screen.componentName) {
+             astModificationsBatch.importsToRemove.push({ componentName: screen.componentName });
+          }
+          changesEffectivelyMade = true; // AST change is pending
         }
       }
-      if (filesActuallyDeletedInBatch.size > 0) {
-        console.log('\nDeletion of files completed for this batch session!');
+      if (filesActuallyDeletedInThisBlock.size > 0) {
+        console.log('\nDeletion of files completed for this block.');
       }
     }
-
-
+    
+    // --- Handle Renames ---
+    // (For renames, AST changes would involve removing old, adding new for structure and imports)
     if (renamedScreens.length > 0) {
         for (const { oldScreen, newScreen } of renamedScreens) {
             console.log(`\nProcessing RENAME for '${oldScreen.name}' to '${newScreen.name}'`);
             const { confirmRenameOps } = await inquirer.default.prompt([{
                 type: 'confirm',
                 name: 'confirmRenameOps',
-                message: `Confirm RENAME and REGENERATION of all associated files for '${oldScreen.name}' to '${newScreen.name}'?`,
+                message: `Confirm RENAME of files, REGENERATION of content, and update of layout.tsx for '${oldScreen.name}' to '${newScreen.name}'?`,
                 default: true,
             }]);
             if (confirmRenameOps) {
@@ -887,20 +906,27 @@ async function processBatchOfChanges(configToProcessScreens) {
                     generateNextPageFile(newScreen.name, newScreen.componentName, true, true)
                 ]);
                 paths.filter(p => p).forEach(p => allGeneratedOrModifiedFiles.add(p));
-                if (paths.some(p => p)) changesEffectivelyMade = true;
+                
+                astModificationsBatch.screenNamesToDelete.push({ name: oldScreen.name });
+                if (oldScreen.componentName) astModificationsBatch.importsToRemove.push({ componentName: oldScreen.componentName });
+                astModificationsBatch.screensToAdd.push({ name: newScreen.name, componentName: newScreen.componentName, title: newScreen.title, icon: newScreen.icon });
+                astModificationsBatch.importsToAdd.push({ componentName: newScreen.componentName, screenName: newScreen.name });
+                changesEffectivelyMade = true;
             } else {
-                console.log(`Skipped file operations for rename of '${oldScreen.name}'.`);
+                console.log(`Skipped operations for rename of '${oldScreen.name}'.`);
             }
         }
     }
     
+    // --- Handle Updates ---
+    // (For updates, if componentName changes, it's like an import removal and addition)
     if (updatedScreens.length > 0) {
-        for (const { newScreen } of updatedScreens) { 
+        for (const { oldScreen, newScreen } of updatedScreens) { 
             console.log(`\nProcessing UPDATE for screen: ${newScreen.name}`);
              const { confirmUpdateOps } = await inquirer.default.prompt([{
                 type: 'confirm',
                 name: 'confirmUpdateOps',
-                message: `Confirm REGENERATION of files for screen '${newScreen.name}' due to content/component update?`,
+                message: `Confirm REGENERATION of files and update of layout.tsx for screen '${newScreen.name}'?`,
                 default: true,
             }]);
             if (confirmUpdateOps) {
@@ -910,20 +936,34 @@ async function processBatchOfChanges(configToProcessScreens) {
                     generateNextPageFile(newScreen.name, newScreen.componentName, true, true)
                 ]);
                 paths.filter(p => p).forEach(p => allGeneratedOrModifiedFiles.add(p));
-                if (paths.some(p => p)) changesEffectivelyMade = true;
+
+                if (oldScreen.componentName !== newScreen.componentName) {
+                    if (oldScreen.componentName) astModificationsBatch.importsToRemove.push({ componentName: oldScreen.componentName });
+                    astModificationsBatch.importsToAdd.push({ componentName: newScreen.componentName, screenName: newScreen.name });
+                }
+                // Screen entry in structure itself might need an update if componentName changed,
+                // but simpler to delete old and add new if these properties changed in AST.
+                // For now, modifyLayoutFileWithAst for add/delete handles the structure. If componentName changed,
+                // the existing entry for screen.name will be updated by the add logic if it detects only component differs.
+                // However, a more robust way is to explicitly update. For simplicity now, we rely on delete old screen (if name changed, handled by rename)
+                // or newScreen details will be used by generate logic. The current AST add will NOT update if screen name exists.
+                // This requires a dedicated AST update mechanism not just add/delete.
+                // For now, the file regeneration is the primary effect. AST for title/icon changes is not handled by modifyLayoutFileWithAst's add/delete.
+                changesEffectivelyMade = true;
             } else {
                  console.log(`Skipped file regeneration for update of '${newScreen.name}'.`);
             }
         }
     }
 
+    // --- Handle Additions ---
     if (newScreens.length > 0) {
         for (const screen of newScreens) {
             console.log(`\nProcessing ADDITION for screen: ${screen.name}`);
             const { confirmAddOps } = await inquirer.default.prompt([{
                 type: 'confirm',
                 name: 'confirmAddOps',
-                message: `Confirm generation of ALL associated files for new screen '${screen.name}'?`,
+                message: `Confirm generation of ALL associated files and update of layout.tsx for new screen '${screen.name}'?`,
                 default: true,
             }]);
             if (confirmAddOps) {
@@ -933,16 +973,37 @@ async function processBatchOfChanges(configToProcessScreens) {
                     generateNextPageFile(screen.name, screen.componentName, false, true)
                 ]);
                 paths.filter(p => p).forEach(p => allGeneratedOrModifiedFiles.add(p));
-                if (paths.some(p => p)) changesEffectivelyMade = true;
+                
+                astModificationsBatch.screensToAdd.push({ name: screen.name, componentName: screen.componentName, title: screen.title, icon: screen.icon });
+                astModificationsBatch.importsToAdd.push({ componentName: screen.componentName, screenName: screen.name });
+                changesEffectivelyMade = true;
             } else {
-                console.log(`Skipped file generation for new screen '${screen.name}'.`);
+                console.log(`Skipped operations for new screen '${screen.name}'.`);
             }
         }
     }
 
+    // Apply all collected AST modifications once
+    if (astModificationsBatch.screensToAdd.length > 0 ||
+        astModificationsBatch.screenNamesToDelete.length > 0 ||
+        astModificationsBatch.importsToAdd.length > 0 ||
+        astModificationsBatch.importsToRemove.length > 0) {
+        console.log("\nApplying all confirmed changes to layout.tsx...");
+        await modifyLayoutFileWithAst(astModificationsBatch);
+        changesEffectivelyMade = true; // Ensure this is true if AST was touched
+    }
+
+
     if (changesEffectivelyMade || ignoreNextConfigChange) { 
-      lastAcknowledgedConfigState = { screens: configToProcessScreens }
-      console.log("Snapshot `lastAcknowledgedConfigState` updated.")
+      // Important: After potential AST modification, re-parse to get the true current state for lastAcknowledgedConfigState
+      const finalLayoutState = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+      if (finalLayoutState && finalLayoutState.screens) {
+        lastAcknowledgedConfigState = { screens: finalLayoutState.screens };
+      } else {
+        console.warn("Could not re-parse layout.tsx after AST changes; lastAcknowledgedConfigState might be stale.");
+        lastAcknowledgedConfigState = { screens: configToProcessScreens }; // Fallback
+      }
+      console.log("Snapshot `lastAcknowledgedConfigState` updated with latest from layout.tsx.");
       
       const filesToCommit = [NAVIGATION_CONFIG_PATH, ...allGeneratedOrModifiedFiles];
       const uniqueFiles = [...new Set(filesToCommit.filter(Boolean))];
@@ -1146,7 +1207,7 @@ async function validateProjectConsistency(declaredScreens, layoutSourceFile, isI
   const choices = proposedFixes.map((fix, index) => ({
       name: `${fix.description} (Action: ${fix.fixType.replace(/_/g, ' ')})`,
       value: index,
-      checked: true // Pre-select all fixes
+      checked: true 
   }));
 
   if (!isInteractive) {
@@ -1307,7 +1368,7 @@ async function onConfigFileChanged(changedPath) {
     if (actionsForAst.screensToAdd.length > 0 || actionsForAst.screenNamesToDelete.length > 0 || actionsForAst.importsToAdd.length > 0 || actionsForAst.importsToRemove.length > 0) {
         await modifyLayoutFileWithAst(actionsForAst);
         astActuallyModifiedByCommands = true;
-        parsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH); // Re-assign
+        parsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH); 
         if (!parsedResult || !parsedResult.screens) {
           console.error('Failed to re-parse layout.tsx after applying commands. Aborting further processing.');
           return;

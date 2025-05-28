@@ -1,12 +1,15 @@
 // packages/app/features/navigation/layout.tsx
 import { ComponentType } from 'react'
 import { Text } from 'react-native' // For placeholder icon
-// Import shared screen components
 import { HomeScreen } from '../home/screen'
 import { AccountScreen } from '../account/screen'
+import { SettingsScreen } from '../settings/screen'
 import { AboutScreen } from '../about/screen'
+import { ThreeScreen } from '../three/screen'
+import { FourScreen } from '../four/screen'
+export const isAutoSaveEnabled = true
+export const isEditing = false
 // --- Configuration Types ---
-
 /**
  * Generic options applicable to any screen in any navigator.
  */
@@ -14,10 +17,7 @@ export interface ScreenOptionsConfig {
   title?: string
   headerShown?: boolean
   tabBarIconName?: string // Used for tab icons
-  // Add other common React Navigation/Expo Router options as needed
-  // e.g., presentation: 'modal' for stack screens
 }
-
 /**
  * Configuration for a single screen.
  */
@@ -26,7 +26,6 @@ export interface ScreenConfig {
   component: ComponentType<any> // TODO: Consider a more specific type if possible
   options?: ScreenOptionsConfig // Options specific to this screen
 }
-
 /**
  * Options specific to the Tab.Navigator component itself (e.g., tab bar styling).
  * These are props that would be passed directly to the <Tab.Navigator> component.
@@ -35,21 +34,12 @@ export interface TabNavigatorOwnOptions {
   tabBarActiveTintColor?: string
   tabBarInactiveTintColor?: string
   tabBarStyle?: object // Should be StyleProp<ViewStyle> in practice
-  // Add other Tab.Navigator direct props like backBehavior, sceneContainerStyle, etc.
-  // Example:
-  // backBehavior?: 'firstRoute' | 'initialRoute' | 'order' | 'history' | 'none';
-  // sceneContainerStyle?: object; // StyleProp<ViewStyle>
 }
-
 /**
  * Default screen options for screens *within* a TabNavigator.
  * These are passed to the `screenOptions` prop of the <Tab.Navigator>.
  */
-export interface TabNavigatorScreenOptions extends ScreenOptionsConfig {
-  // Add any tab-specific screen options if they differ from general ScreenOptionsConfig
-  // For example, tabBarLabel, tabBarBadge, etc. could be defaulted here.
-}
-
+export interface TabNavigatorScreenOptions extends ScreenOptionsConfig {}
 /**
  * Configuration for a Tab Navigator.
  */
@@ -58,17 +48,13 @@ export interface TabNavigatorLayoutConfig {
   name: string // Name of the tab group (e.g., '(tabs)')
   initialRouteName?: string
   screens: ScreenConfig[]
-
   /** Options for this TabNavigator when it acts as a screen in a parent StackNavigator. */
   stackScreenOptions?: ScreenOptionsConfig // e.g., { headerShown: false } for the (tabs) group in RootStack
-
   /** Options for the <Tab.Navigator> component itself (e.g., tab bar styling). */
   tabNavigatorOptions?: TabNavigatorOwnOptions
-
   /** Default options for all screens *within* this TabNavigator (passed to <Tab.Navigator screenOptions={...}>). */
   tabScreenOptions?: TabNavigatorScreenOptions // e.g., { headerShown: true } for all tab screens
 }
-
 /**
  * Configuration for a Stack Navigator.
  */
@@ -78,20 +64,16 @@ export interface StackNavigatorLayoutConfig {
   initialRouteName?: string
   screens: (ScreenConfig | TabNavigatorLayoutConfig)[]
   /** Default options for all screens *within* this StackNavigator, and for the navigator itself if nested. */
-  options?: ScreenOptionsConfig & {
-    // Add StackNavigator-specific options for the navigator itself
-  }
+  options?: ScreenOptionsConfig & {}
 }
-
 export type NavigatorLayout = StackNavigatorLayoutConfig | TabNavigatorLayoutConfig
-
 // --- Main Navigation Structure ---
 export const appNavigationStructure: NavigatorLayout[] = [
   {
     type: 'stack',
     name: 'Root',
     initialRouteName: '(tabs)',
-    options: { headerShown: false }, // Hides header for the Root Stack itself
+    options: { headerShown: false },
     screens: [
       {
         type: 'tabs',
@@ -129,22 +111,44 @@ export const appNavigationStructure: NavigatorLayout[] = [
             },
           },
           {
-            name: 'about',
-            component: AboutScreen,
-            options: { title: 'About', tabBarIconName: 'about' },
+            name: 'profile',
+            component: SettingsScreen,
+            options: { title: 'Settings', tabBarIconName: 'settings' },
+          },
+          {
+            name: 'info',
+            component: SettingsScreen,
+            options: { title: 'info', tabBarIconName: 'info' },
+          },
+          {
+            name: 'three',
+            component: ThreeScreen,
+            options: {
+              title: 'Three',
+              tabBarIconName: 'three',
+            },
+          },
+          {
+            name: 'four',
+            component: FourScreen,
+            options: {
+              title: 'Four',
+              tabBarIconName: 'four',
+            },
+          },
+          {
+            name: 'five',
+            component: FiveScreen,
+            options: {
+              title: 'Five',
+              tabBarIconName: 'five',
+            }, 
           },
         ],
       },
-      // Example of another stack screen outside tabs
-      // {
-      //   name: 'UserProfile',
-      //   component: UserProfileScreen, // Assuming UserProfileScreen is imported
-      //   options: { title: 'Profile', headerShown: true },
-      // },
     ],
   },
 ]
-
 // --- Helper Functions ---
 export const findNavigatorLayout = (
   name: string,
@@ -159,13 +163,11 @@ export const findNavigatorLayout = (
   }
   return undefined
 }
-
 export const getRootStackConfig = (): StackNavigatorLayoutConfig | undefined => {
   return appNavigationStructure.find((nav) => nav.type === 'stack' && nav.name === 'Root') as
     | StackNavigatorLayoutConfig
     | undefined
 }
-
 export const PlaceholderIcon = ({
   name,
   color,

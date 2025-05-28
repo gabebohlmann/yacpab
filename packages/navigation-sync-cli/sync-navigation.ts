@@ -111,8 +111,6 @@ function findTabsScreensArrayNodeFromDeclaration(appNavDeclaration) {
 }
 
 function createScreenAstNode(factory, screenDetails) {
-  // Ensure multiLine is true for the main object and the options object
-  // to encourage the printer to use newlines and indentation.
   return factory.createObjectLiteralExpression(
     [
       factory.createPropertyAssignment('name', factory.createStringLiteral(screenDetails.name)),
@@ -137,10 +135,10 @@ function createScreenAstNode(factory, screenDetails) {
           ],
           true
         )
-      ), // multiLine for options object
+      ),
     ],
     true
-  ) // multiLine for the screen object itself
+  )
 }
 // --- End AST Helper Functions ---
 
@@ -151,7 +149,8 @@ async function parseNavigationConfig(filePath) {
       path.basename(filePath),
       fileContent,
       ts.ScriptTarget.ESNext,
-      true
+      true,
+      ts.ScriptKind.TSX // Ensure it parses TSX for layout.tsx
     )
 
     let isAutoSaveOn = false
@@ -261,7 +260,7 @@ async function parseNavigationConfig(filePath) {
       ts.forEachChild(node, visit)
     }
     visit(sourceFile)
-    return { screens: parsedScreens, isAutoSaveOn, isEditing, commandsToExecute }
+    return { screens: parsedScreens, isAutoSaveOn, isEditing, commandsToExecute, sourceFile }
   } catch (error) {
     console.error('Error parsing navigation config:', error.message)
     if (error instanceof SyntaxError || error.message.includes('SyntaxError')) {
@@ -312,7 +311,8 @@ function identifyChanges(currentConfigScreens, previousConfigScreens) {
       const previousScreen = previousScreenMap.get(name)
       if (
         currentScreen.componentName !== previousScreen.componentName ||
-        currentScreen.title !== previousScreen.title
+        currentScreen.title !== previousScreen.title ||
+        currentScreen.icon !== previousScreen.icon
       ) {
         updatedScreens.push({ oldScreen: previousScreen, newScreen: currentScreen })
       }
@@ -355,7 +355,7 @@ async function commitChanges(message, filesToAdd = []) {
       path.isAbsolute(f) ? f : path.join(MONOREPO_ROOT, f)
     )
     if (absoluteFilesToAdd.length > 0) {
-      await git.add(absoluteFilesToAdd)
+      await git.add(absoluteFilesToAdd.filter(f => fs.existsSync(f))) // Only add existing files
     } else {
       console.warn('Commit called with no specific files to add.')
     }
@@ -366,12 +366,12 @@ async function commitChanges(message, filesToAdd = []) {
   }
 }
 
-async function generateFeatureScreen(screenName, componentName, title, isUpdateOrRename = false) {
+async function generateFeatureScreen(screenName, componentName, title, isUpdateOrRename = false, autoConfirm = false) {
   const featurePath = path.join(FEATURES_PATH, screenName)
   const screenFilePath = path.join(featurePath, 'screen.tsx')
   const promptAction = isUpdateOrRename ? 'Update/overwrite' : 'Overwrite'
 
-  if (await fs.pathExists(screenFilePath)) {
+  if (await fs.pathExists(screenFilePath) && !autoConfirm) {
     const { overwrite } = await inquirer.default.prompt([
       {
         type: 'confirm',
@@ -390,7 +390,7 @@ async function generateFeatureScreen(screenName, componentName, title, isUpdateO
   const content = `// packages/app/features/${screenName}/screen.tsx
 'use client';
 
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text } from 'react-native';
 import { useColorScheme } from "react-native"
 
 export function ${componentName}() {
@@ -399,7 +399,7 @@ export function ${componentName}() {
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, backgroundColor: colorScheme === 'dark' ? '#121212' : '#FFFFFF' }}>
       <Text style={{ fontSize: 24, marginBottom: 10, color: colorScheme === 'dark' ? 'white' : 'black' }}>
-        ${title || screenName} 
+        ${title || screenName}
       </Text>
       <Text style={{ fontSize: 12, color: colorScheme === 'dark' ? 'white' : 'black' }}>
         This screen was ${isUpdateOrRename ? 'updated/regenerated' : 'auto-generated'} by the CLI.
@@ -407,19 +407,18 @@ export function ${componentName}() {
     </View>
   )
 }
-
 `
   await fs.writeFile(screenFilePath, content)
   console.log(`${isUpdateOrRename ? 'Updated/Regenerated' : 'Generated'}: ${screenFilePath}`)
   return screenFilePath
 }
 
-async function generateExpoTabFile(screenName, componentName, isUpdateOrRename = false) {
+async function generateExpoTabFile(screenName, componentName, isUpdateOrRename = false, autoConfirm = false) {
   const expoTabDir = path.join(EXPO_APP_PATH, '(tabs)')
   const expoFilePath = path.join(expoTabDir, `${screenName}.tsx`)
   const promptAction = isUpdateOrRename ? 'Update/overwrite' : 'Overwrite'
 
-  if (await fs.pathExists(expoFilePath)) {
+  if (await fs.pathExists(expoFilePath) && !autoConfirm) {
     const { overwrite } = await inquirer.default.prompt([
       {
         type: 'confirm',
@@ -447,12 +446,12 @@ export default function ${capitalizeFirstLetter(screenName)}TabPage() {
   return expoFilePath
 }
 
-async function generateNextPageFile(screenName, componentName, isUpdateOrRename = false) {
+async function generateNextPageFile(screenName, componentName, isUpdateOrRename = false, autoConfirm = false) {
   const nextPageDir = path.join(NEXT_APP_PATH, '(tabs)', screenName)
   const nextFilePath = path.join(nextPageDir, 'page.tsx')
   const promptAction = isUpdateOrRename ? 'Update/overwrite' : 'Overwrite'
 
-  if (await fs.pathExists(nextFilePath)) {
+  if (await fs.pathExists(nextFilePath) && !autoConfirm) {
     const { overwrite } = await inquirer.default.prompt([
       {
         type: 'confirm',
@@ -465,11 +464,10 @@ async function generateNextPageFile(screenName, componentName, isUpdateOrRename 
       console.log(`Skipped ${isUpdateOrRename ? 'updating' : 'overwriting'}: ${nextFilePath}`)
       return null
     }
-  } else if ((await fs.pathExists(nextPageDir)) && !isUpdateOrRename) {
-    console.log(`Directory ${nextPageDir} exists, but page.tsx will be created.`)
-  } else if (!isUpdateOrRename) {
-    await fs.ensureDir(nextPageDir)
+  } else if ((await fs.pathExists(nextPageDir)) && !isUpdateOrRename && !autoConfirm) {
+     // No specific prompt needed here if only dir exists, file will be created.
   }
+  await fs.ensureDir(nextPageDir) // ensureDir is fine even if it exists
 
   const content = `// apps/next/app/(tabs)/${screenName}/page.tsx
 'use client';
@@ -528,7 +526,7 @@ async function renameFeatureDirectory(oldName, newName) {
       )
       return null
     }
-    await fs.rename(oldPath, newPath)
+    await fs.move(oldPath, newPath) // Use fs.move for robustness
     console.log(`Renamed feature directory from ${oldPath} to ${newPath}`)
     return newPath
   }
@@ -544,7 +542,7 @@ async function renameExpoTabFile(oldName, newName) {
       console.warn(`Cannot rename Expo tab file: target ${newPath} already exists.`)
       return null
     }
-    await fs.rename(oldPath, newPath)
+    await fs.move(oldPath, newPath)
     console.log(`Renamed Expo tab file from ${oldPath} to ${newPath}`)
     return newPath
   }
@@ -560,7 +558,7 @@ async function renameNextPageDirectory(oldName, newName) {
       console.warn(`Cannot rename Next.js page directory: target ${newPath} already exists.`)
       return null
     }
-    await fs.rename(oldPath, newPath)
+    await fs.move(oldPath, newPath)
     console.log(`Renamed Next.js page directory from ${oldPath} to ${newPath}`)
     return newPath
   }
@@ -583,7 +581,6 @@ async function modifyLayoutFileWithAst(actions) {
     (context) => {
       const { factory } = context
       const visit = (node) => {
-        // 1. Modify appNavigationStructure
         if (
           ts.isVariableDeclaration(node) &&
           ts.isIdentifier(node.name) &&
@@ -597,20 +594,13 @@ async function modifyLayoutFileWithAst(actions) {
               let currentScreenElements = [...tabsScreensArrayNodeOriginal.elements]
 
               if (actions.screenNamesToDelete && actions.screenNamesToDelete.length > 0) {
-                const namesToDelete = new Set(actions.screenNamesToDelete.map((s) => s.name))
+                const namesToDelete = new Set(actions.screenNamesToDelete.map((s) => s.name)) // s.name is expected
                 currentScreenElements = currentScreenElements.filter((elNode) => {
                   if (ts.isObjectLiteralExpression(elNode)) {
                     const nameProp = elNode.properties.find(
-                      (p) =>
-                        ts.isPropertyAssignment(p) &&
-                        ts.isIdentifier(p.name) &&
-                        p.name.text === 'name'
+                      (p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'name'
                     )
-                    if (
-                      nameProp &&
-                      ts.isPropertyAssignment(nameProp) &&
-                      ts.isStringLiteral(nameProp.initializer)
-                    ) {
+                    if (nameProp && ts.isPropertyAssignment(nameProp) && ts.isStringLiteral(nameProp.initializer)) {
                       return !namesToDelete.has(nameProp.initializer.text)
                     }
                   }
@@ -623,16 +613,10 @@ async function modifyLayoutFileWithAst(actions) {
                   const exists = currentScreenElements.some((elNode) => {
                     if (ts.isObjectLiteralExpression(elNode)) {
                       const nameProp = elNode.properties.find(
-                        (p) =>
-                          ts.isPropertyAssignment(p) &&
-                          ts.isIdentifier(p.name) &&
-                          p.name.text === 'name'
+                        (p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'name'
                       )
                       return (
-                        nameProp &&
-                        ts.isPropertyAssignment(nameProp) &&
-                        ts.isStringLiteral(nameProp.initializer) &&
-                        nameProp.initializer.text === screenDetail.name
+                        nameProp && ts.isPropertyAssignment(nameProp) && ts.isStringLiteral(nameProp.initializer) && nameProp.initializer.text === screenDetail.name
                       )
                     }
                     return false
@@ -640,40 +624,23 @@ async function modifyLayoutFileWithAst(actions) {
                   if (!exists) {
                     currentScreenElements.push(createScreenAstNode(factory, screenDetail))
                   } else {
-                    console.log(
-                      `AST: Screen '${screenDetail.name}' already present, not adding again.`
-                    )
+                    console.log(`AST: Screen '${screenDetail.name}' already present in structure, not adding again.`)
                   }
                 })
               }
 
-              const newTabsScreensArray = factory.updateArrayLiteralExpression(
-                tabsScreensArrayNodeOriginal,
-                currentScreenElements
-              )
-
+              const newTabsScreensArray = factory.updateArrayLiteralExpression(tabsScreensArrayNodeOriginal, currentScreenElements)
               const newAppNavInitializer = factory.updateArrayLiteralExpression(
                 appNavArrayNode,
                 appNavArrayNode.elements.map((rootStackElement) => {
                   if (
                     ts.isObjectLiteralExpression(rootStackElement) &&
-                    rootStackElement.properties.some(
-                      (p) =>
-                        ts.isPropertyAssignment(p) &&
-                        ts.isIdentifier(p.name) &&
-                        p.name.text === 'name' &&
-                        ts.isStringLiteral(p.initializer) &&
-                        p.initializer.text === 'Root'
-                    )
+                    rootStackElement.properties.some(p => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'name' && ts.isStringLiteral(p.initializer) && p.initializer.text === 'Root')
                   ) {
                     return factory.updateObjectLiteralExpression(
                       rootStackElement,
                       rootStackElement.properties.map((prop) => {
-                        if (
-                          ts.isPropertyAssignment(prop) &&
-                          ts.isIdentifier(prop.name) &&
-                          prop.name.text === 'screens'
-                        ) {
+                        if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && prop.name.text === 'screens') {
                           const rootScreensArray = prop.initializer
                           if (ts.isArrayLiteralExpression(rootScreensArray)) {
                             return factory.updatePropertyAssignment(
@@ -684,28 +651,13 @@ async function modifyLayoutFileWithAst(actions) {
                                 rootScreensArray.elements.map((tabNavCandidate) => {
                                   if (
                                     ts.isObjectLiteralExpression(tabNavCandidate) &&
-                                    tabNavCandidate.properties.some(
-                                      (p) =>
-                                        ts.isPropertyAssignment(p) &&
-                                        ts.isIdentifier(p.name) &&
-                                        p.name.text === 'name' &&
-                                        ts.isStringLiteral(p.initializer) &&
-                                        p.initializer.text === '(tabs)'
-                                    )
+                                    tabNavCandidate.properties.some(p => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'name' && ts.isStringLiteral(p.initializer) && p.initializer.text === '(tabs)')
                                   ) {
                                     return factory.updateObjectLiteralExpression(
                                       tabNavCandidate,
                                       tabNavCandidate.properties.map((tabNavProp) => {
-                                        if (
-                                          ts.isPropertyAssignment(tabNavProp) &&
-                                          ts.isIdentifier(tabNavProp.name) &&
-                                          tabNavProp.name.text === 'screens'
-                                        ) {
-                                          return factory.updatePropertyAssignment(
-                                            tabNavProp,
-                                            tabNavProp.name,
-                                            newTabsScreensArray
-                                          )
+                                        if (ts.isPropertyAssignment(tabNavProp) && ts.isIdentifier(tabNavProp.name) && tabNavProp.name.text === 'screens') {
+                                          return factory.updatePropertyAssignment(tabNavProp, tabNavProp.name, newTabsScreensArray)
                                         }
                                         return tabNavProp
                                       })
@@ -724,13 +676,7 @@ async function modifyLayoutFileWithAst(actions) {
                   return rootStackElement
                 })
               )
-              return factory.updateVariableDeclaration(
-                node,
-                node.name,
-                node.exclamationToken, // Corrected: Was node.type
-                node.type,            // Corrected: Was newAppNavInitializer
-                newAppNavInitializer  // Corrected: Added this argument
-              )
+              return factory.updateVariableDeclaration(node, node.name, node.exclamationToken, node.type, newAppNavInitializer)
             }
           }
         }
@@ -742,22 +688,12 @@ async function modifyLayoutFileWithAst(actions) {
           node.name.text === 'commandsToExecute'
         ) {
           return factory.updateVariableDeclaration(
-            node,
-            node.name,
-            node.exclamationToken,
-            node.type,
+            node, node.name, node.exclamationToken, node.type,
             factory.createObjectLiteralExpression(
               [
-                factory.createPropertyAssignment(
-                  'add',
-                  factory.createArrayLiteralExpression([], true)
-                ),
-                factory.createPropertyAssignment(
-                  'delete',
-                  factory.createArrayLiteralExpression([], true)
-                ),
-              ],
-              true
+                factory.createPropertyAssignment('add', factory.createArrayLiteralExpression([], true)),
+                factory.createPropertyAssignment('delete', factory.createArrayLiteralExpression([], true)),
+              ], true
             )
           )
         }
@@ -770,99 +706,57 @@ async function modifyLayoutFileWithAst(actions) {
         const otherStatements = statements.filter((s) => !ts.isImportDeclaration(s))
 
         if (actions.importsToRemove && actions.importsToRemove.length > 0) {
-          const componentsToRemove = new Set(
-            actions.importsToRemove.map((imp) => imp.componentName).filter(Boolean)
-          )
+          const componentsToRemove = new Set(actions.importsToRemove.map((imp) => imp.componentName).filter(Boolean))
           if (componentsToRemove.size > 0) {
-            existingImports = existingImports.filter((importDecl) => {
-              if (
-                importDecl.importClause &&
-                importDecl.importClause.namedBindings &&
-                ts.isNamedImports(importDecl.importClause.namedBindings)
-              ) {
-                const importedElements = importDecl.importClause.namedBindings.elements
-                const hasComponentToRemove = importedElements.some(
-                  (el) =>
-                    el.name && ts.isIdentifier(el.name) && componentsToRemove.has(el.name.text)
-                )
+            const newExistingImports = [];
+            for (const importDecl of existingImports) {
+              if (importDecl.importClause && importDecl.importClause.namedBindings && ts.isNamedImports(importDecl.importClause.namedBindings)) {
+                const originalElements = importDecl.importClause.namedBindings.elements;
+                const newElements = originalElements.filter(el => !(el.name && ts.isIdentifier(el.name) && componentsToRemove.has(el.name.text)));
 
-                if (hasComponentToRemove) {
-                  const allSpecifiersAreBeingRemoved = importedElements.every(
-                    (el) =>
-                      el.name && ts.isIdentifier(el.name) && componentsToRemove.has(el.name.text)
-                  )
-                  if (allSpecifiersAreBeingRemoved) {
-                    console.log(
-                      `AST: Prepared removal of entire import declaration for: ${importedElements.map((e) => e.name.text).join(', ')}.`
-                    )
-                    return false
-                  }
-                  console.log(
-                    `AST: Import for a component to remove is part of a multi-import. Kept: ${importDecl.getText(sourceFileNode)}`
-                  )
+                if (newElements.length === 0) {
+                  console.log(`AST: Prepared removal of entire import declaration for: ${originalElements.map(e => e.name.text).join(', ')}.`);
+                  // Skip adding this importDecl to newExistingImports
+                  continue;
+                } else if (newElements.length < originalElements.length) {
+                  console.log(`AST: Prepared removal of specific component(s) from import declaration. Kept: ${newElements.map(e => e.name.text).join(', ')}`);
+                  const updatedNamedImports = factory.updateNamedImports(importDecl.importClause.namedBindings, newElements);
+                  const updatedImportClause = factory.updateImportClause(importDecl.importClause, importDecl.importClause.isTypeOnly, importDecl.importClause.name, updatedNamedImports);
+                  newExistingImports.push(factory.updateImportDeclaration(importDecl, importDecl.decorators, importDecl.modifiers, updatedImportClause, importDecl.moduleSpecifier, importDecl.assertClause));
+                  continue;
                 }
               }
-              return true
-            })
+              newExistingImports.push(importDecl);
+            }
+            existingImports = newExistingImports;
           }
         }
 
+
         if (actions.importsToAdd && actions.importsToAdd.length > 0) {
           actions.importsToAdd.forEach((imp) => {
-            if (
-              !imp.componentName ||
-              !imp.screenName ||
-              !/^[a-zA-Z_$][a-zA-Z\d_$]*$/.test(imp.componentName)
-            ) {
-              console.warn(
-                `AST: Invalid or missing componentName ("${imp.componentName}") or screenName ("${imp.screenName}") for import. Skipping import.`
-              )
+            if (!imp.componentName || !imp.screenName || !/^[a-zA-Z_$][a-zA-Z\d_$]*$/.test(imp.componentName)) {
+              console.warn(`AST: Invalid or missing componentName ("${imp.componentName}") or screenName ("${imp.screenName}") for import. Skipping import.`);
               return
             }
             const relativePath = `../${imp.screenName}/screen`
             const alreadyExists = existingImports.some(
-              (i) =>
-                i.importClause &&
-                i.importClause.namedBindings &&
-                ts.isNamedImports(i.importClause.namedBindings) &&
-                i.importClause.namedBindings.elements.some(
-                  (el) => el.name.text === imp.componentName
-                ) &&
-                ts.isStringLiteral(i.moduleSpecifier) &&
-                i.moduleSpecifier.text === relativePath
+              (i) => i.importClause && i.importClause.namedBindings && ts.isNamedImports(i.importClause.namedBindings) &&
+                     i.importClause.namedBindings.elements.some((el) => el.name.text === imp.componentName) &&
+                     ts.isStringLiteral(i.moduleSpecifier) && i.moduleSpecifier.text === relativePath
             )
             if (!alreadyExists) {
-              const newImportSpecifier = factory.createImportSpecifier(
-                false,
-                undefined,
-                factory.createIdentifier(imp.componentName)
-              )
+              const newImportSpecifier = factory.createImportSpecifier(false, undefined, factory.createIdentifier(imp.componentName))
               const newNamedImports = factory.createNamedImports([newImportSpecifier])
               const newImportClause = factory.createImportClause(false, undefined, newNamedImports)
-
-              existingImports.push(
-                factory.createImportDeclaration(
-                  undefined, // decorators
-                  undefined, // modifiers
-                  newImportClause,
-                  factory.createStringLiteral(relativePath),
-                  undefined // assertClause
-                )
-              )
+              existingImports.push(factory.createImportDeclaration(undefined, undefined, newImportClause, factory.createStringLiteral(relativePath), undefined))
               console.log(`AST: Prepared addition of import for ${imp.componentName} from ${relativePath}.`)
             }
           })
         }
 
-        const transformedOtherStatements = ts.visitNodes(
-          factory.createNodeArray(otherStatements),
-          visit,
-          context // Pass context here
-        )
-        return factory.updateSourceFile(sourceFileNode, [
-          ...existingImports,
-          ...transformedOtherStatements,
-        ])
+        const transformedOtherStatements = ts.visitNodes(factory.createNodeArray(otherStatements), visit, context)
+        return factory.updateSourceFile(sourceFileNode, [...existingImports, ...transformedOtherStatements,])
       }
     },
   ])
@@ -877,9 +771,7 @@ async function modifyLayoutFileWithAst(actions) {
 
 async function processBatchOfChanges(configToProcessScreens) {
   if (actionInProgress) {
-    console.warn(
-      'processBatchOfChanges called while actionInProgress was already true. This is unexpected.'
-    )
+    console.warn('processBatchOfChanges called while actionInProgress was already true. This is unexpected.')
     reevaluateAfterCompletion = true
     return
   }
@@ -891,463 +783,152 @@ async function processBatchOfChanges(configToProcessScreens) {
       lastAcknowledgedConfigState?.screens
     )
 
-    const hasAnyChanges =
-      newScreens.length > 0 ||
-      deletedScreens.length > 0 ||
-      updatedScreens.length > 0 ||
-      renamedScreens.length > 0
+    const hasAnyChanges = newScreens.length > 0 || deletedScreens.length > 0 || updatedScreens.length > 0 || renamedScreens.length > 0
 
     if (!hasAnyChanges) {
       console.log('No actionable screen changes to process relative to last acknowledged state.')
       lastAcknowledgedConfigState = { screens: configToProcessScreens }
-      actionInProgress = false; // Ensure this is reset
-      return
+      actionInProgress = false; return
     }
 
     let promptMessage = 'The following changes are detected based on your latest edits:\n'
-    if (deletedScreens.length > 0)
-      promptMessage += `  - DELETIONS: ${deletedScreens.map((s) => s.name).join(', ')}\n`
-    if (renamedScreens.length > 0)
-      promptMessage += `  - RENAMES: ${renamedScreens.map((r) => `'${r.oldScreen.name}' to '${r.newScreen.name}'`).join(', ')}\n`
-    if (updatedScreens.length > 0)
-      promptMessage += `  - UPDATES (title/component): ${updatedScreens.map((u) => u.newScreen.name).join(', ')}\n`
-    if (newScreens.length > 0)
-      promptMessage += `  - ADDITIONS: ${newScreens.map((s) => s.name).join(', ')}\n`
+    if (deletedScreens.length > 0) promptMessage += `  - DELETIONS: ${deletedScreens.map((s) => s.name).join(', ')}\n`
+    if (renamedScreens.length > 0) promptMessage += `  - RENAMES: ${renamedScreens.map((r) => `'${r.oldScreen.name}' to '${r.newScreen.name}'`).join(', ')}\n`
+    if (updatedScreens.length > 0) promptMessage += `  - UPDATES (title/component/icon): ${updatedScreens.map((u) => u.newScreen.name).join(', ')}\n`
+    if (newScreens.length > 0) promptMessage += `  - ADDITIONS: ${newScreens.map((s) => s.name).join(', ')}\n`
     promptMessage += 'Do you want to proceed with these changes now?'
 
-    const { confirmProcessNow } = await inquirer.default.prompt([
-      { type: 'confirm', name: 'confirmProcessNow', message: promptMessage, default: true },
-    ])
+    const { confirmProcessNow } = await inquirer.default.prompt([{ type: 'confirm', name: 'confirmProcessNow', message: promptMessage, default: true },])
 
     if (!confirmProcessNow) {
-      console.log(
-        'User chose not to process accumulated changes now. Edits remain, will re-evaluate on next save if isEditing becomes false or autosave is off.'
-      )
-      actionInProgress = false; // Ensure this is reset
-      return
+      console.log('User chose not to process accumulated changes now. Will re-evaluate on next save or relevant event.')
+      actionInProgress = false; return
     }
 
     let changesEffectivelyMade = false
+    const allGeneratedOrModifiedFiles = new Set();
 
-    // --- Handle Deletions ---
     if (deletedScreens.length > 0) {
-      const otherUncommittedChangesDel = await checkUncommittedChanges()
-      if (otherUncommittedChangesDel.length > 0) {
-        /* Git check */
-         console.warn(`Warning: There are ${otherUncommittedChangesDel.length} other uncommitted changes in the repository. Please commit or stash them before proceeding with deletions.`);
-        const { confirmDespiteChanges } = await inquirer.default.prompt([
-            { type: 'confirm', name: 'confirmDespiteChanges', message: 'Proceed with deletions despite other uncommitted changes?', default: false }
-        ]);
-        if (!confirmDespiteChanges) {
-            console.log('Deletion process cancelled due to uncommitted changes.');
-            actionInProgress = false; return;
-        }
-      }
-
-      const deletedFilePaths = []
-      let allDeletionOpsConfirmed = true
+      const deletedFilePaths = [];
       for (const screen of deletedScreens) {
-        console.log(
-          `\nProcessing DELETION for screen: ${screen.name} (Component: ${screen.componentName})`
-        )
-        const deletionOps = [
-          {
-            name: `Delete feature for ${screen.name}`,
-            action: async () => {
-              const p = await deleteFeature(screen.name)
-              if (p) deletedFilePaths.push(p)
-            },
-          },
-          {
-            name: `Delete Expo tab file for ${screen.name}`,
-            action: async () => {
-              const p = await deleteExpoTabFile(screen.name)
-              if (p) deletedFilePaths.push(p)
-            },
-          },
-          {
-            name: `Delete Next.js page for ${screen.name}`,
-            action: async () => {
-              const p = await deleteNextPage(screen.name)
-              if (p) deletedFilePaths.push(p)
-            },
-          },
-        ]
-        for (const op of deletionOps) {
-          const { confirmOp } = await inquirer.default.prompt([
-            {
-              type: 'confirm',
-              name: 'confirmOp',
-              message: `Confirm DELETION: ${op.name}?`,
-              default: true,
-            },
-          ])
-          if (!confirmOp) {
-            allDeletionOpsConfirmed = false
-            console.log(`Operation "${op.name}" cancelled.`)
-            break
-          }
-          try {
-            await op.action()
-            changesEffectivelyMade = true
-          } catch (error) {
-            console.error(`Error during "${op.name}":`, error)
-            allDeletionOpsConfirmed = false
-            break
-          }
-        }
-        if (!allDeletionOpsConfirmed) break
-      }
-      if (allDeletionOpsConfirmed && (deletedFilePaths.length > 0 || ignoreNextConfigChange)) { // ignoreNextConfigChange might be true if only AST changed
-        console.log('\nDeletion process completed for this batch!')
-        const { confirmCommitDeletions } = await inquirer.default.prompt([
-          {
+        console.log(`\nProcessing DELETION for screen: ${screen.name} (Component: ${screen.componentName})`)
+        const { confirmDeleteOps } = await inquirer.default.prompt([{
             type: 'confirm',
-            name: 'confirmCommitDeletions',
-            message: 'Commit these deletions?',
+            name: 'confirmDeleteOps',
+            message: `Confirm deletion of ALL associated files for screen '${screen.name}'?`,
             default: true,
-          },
-        ])
-        if (confirmCommitDeletions) {
-          await commitChanges(`feat: remove screens via nav-sync - ${deletedScreens.map(s=>s.name).join(', ')}`, [...deletedFilePaths, NAVIGATION_CONFIG_PATH]);
-        }
-      } else if (!allDeletionOpsConfirmed) {
-        console.log('Deletion process cancelled.')
-        actionInProgress = false; return;
-      } else {
-        console.log('No files actually deleted for deletion batch, but AST might have changed.');
-      }
-    }
-
-    // --- Handle Renames ---
-    if (renamedScreens.length > 0) {
-      const otherUncommittedChangesRen = await checkUncommittedChanges()
-      if (otherUncommittedChangesRen.length > 0) {
-         console.warn(`Warning: There are ${otherUncommittedChangesRen.length} other uncommitted changes. Please commit or stash them.`);
-        const { confirmDespiteChanges } = await inquirer.default.prompt([
-            { type: 'confirm', name: 'confirmDespiteChanges', message: 'Proceed with renames despite other uncommitted changes?', default: false }
-        ]);
-        if (!confirmDespiteChanges) {
-            console.log('Rename process cancelled.');
-            actionInProgress = false; return;
-        }
-      }
-
-      const renamedOrUpdatedFilePaths = []
-      let allRenameOpsConfirmed = true
-      for (const { oldScreen, newScreen } of renamedScreens) {
-        console.log(`\nProcessing RENAME for '${oldScreen.name}' to '${newScreen.name}'`)
-        const renameOps = [
-          {
-            name: `Rename feature directory for '${oldScreen.name}' to '${newScreen.name}'`,
-            action: async () => {
-              const p = await renameFeatureDirectory(oldScreen.name, newScreen.name); if (p) renamedOrUpdatedFilePaths.push(p);
-            },
-          },
-          {
-            name: `Rename Expo tab file for '${oldScreen.name}' to '${newScreen.name}'`,
-            action: async () => {
-              const p = await renameExpoTabFile(oldScreen.name, newScreen.name); if (p) renamedOrUpdatedFilePaths.push(p);
-            },
-          },
-          {
-            name: `Rename Next.js page directory for '${oldScreen.name}' to '${newScreen.name}'`,
-            action: async () => {
-              const p = await renameNextPageDirectory(oldScreen.name, newScreen.name); if (p) renamedOrUpdatedFilePaths.push(p);
-            },
-          },
-          {
-            name: `Update/regenerate feature screen content for '${newScreen.name}'`,
-            action: async () => {
-              const p = await generateFeatureScreen(
-                newScreen.name,
-                newScreen.componentName,
-                newScreen.title || newScreen.name,
-                true
-              )
-              if (p) renamedOrUpdatedFilePaths.push(p)
-            },
-          },
-          {
-            name: `Update/regenerate Expo tab file content for '${newScreen.name}'`,
-            action: async () => {
-              const p = await generateExpoTabFile(newScreen.name, newScreen.componentName, true)
-              if (p) renamedOrUpdatedFilePaths.push(p)
-            },
-          },
-          {
-            name: `Update/regenerate Next.js page file content for '${newScreen.name}'`,
-            action: async () => {
-              const p = await generateNextPageFile(newScreen.name, newScreen.componentName, true)
-              if (p) renamedOrUpdatedFilePaths.push(p)
-            },
-          },
-        ]
-        for (const op of renameOps) {
-          const { confirmOp } = await inquirer.default.prompt([
-            {
-              type: 'confirm',
-              name: 'confirmOp',
-              message: `Confirm RENAME action: ${op.name}?`,
-              default: true,
-            },
-          ])
-          if (!confirmOp) {
-            allRenameOpsConfirmed = false
-            console.log(`Operation "${op.name}" cancelled.`)
-            break
-          }
-          try {
-            await op.action()
-            changesEffectivelyMade = true
-          } catch (error) {
-            console.error(`Error during "${op.name}":`, error)
-            allRenameOpsConfirmed = false
-            break
-          }
-        }
-        if (!allRenameOpsConfirmed) break
-      }
-      if (
-        allRenameOpsConfirmed &&
-        (renamedOrUpdatedFilePaths.length > 0 || ignoreNextConfigChange)
-      ) {
-        console.log('\nRename process completed!')
-        const { confirmCommitRenames } = await inquirer.default.prompt([
-          {
-            type: 'confirm',
-            name: 'confirmCommitRenames',
-            message: 'Commit these renames/updates?',
-            default: true,
-          },
-        ])
-        if (confirmCommitRenames) {
-           await commitChanges(`feat: rename/update screens via nav-sync - ${renamedScreens.map(r => `${r.oldScreen.name} to ${r.newScreen.name}`).join(', ')}`, [...new Set([...renamedOrUpdatedFilePaths, NAVIGATION_CONFIG_PATH])]);
-        }
-      } else if (!allRenameOpsConfirmed) {
-        console.log('Rename process cancelled.')
-        actionInProgress = false; return;
-      } else {
-        console.log('No files actually renamed/updated for rename batch, but AST might have changed.');
-      }
-    }
-
-    // --- Handle Updates (title/componentName changes for same screen name) ---
-    if (updatedScreens.length > 0) {
-      const otherUncommittedChangesUpd = await checkUncommittedChanges()
-      if (otherUncommittedChangesUpd.length > 0) {
-        /* Git check */
-         console.warn(`Warning: There are ${otherUncommittedChangesUpd.length} other uncommitted changes. Please commit or stash them.`);
-        const { confirmDespiteChanges } = await inquirer.default.prompt([
-            { type: 'confirm', name: 'confirmDespiteChanges', message: 'Proceed with updates despite other uncommitted changes?', default: false }
-        ]);
-        if (!confirmDespiteChanges) {
-            console.log('Update process cancelled.');
-            actionInProgress = false; return;
-        }
-      }
-
-      const updatedFilePaths = []
-      let allUpdateOpsConfirmed = true
-      for (const { oldScreen, newScreen } of updatedScreens) {
-        console.log(`\nProcessing UPDATE for screen: ${newScreen.name}`)
-        const updateOps = [
-          {
-            name: `Update feature screen for ${newScreen.name}`,
-            action: async () => {
-              const p = await generateFeatureScreen(
-                newScreen.name,
-                newScreen.componentName,
-                newScreen.title || newScreen.name,
-                true
-              )
-              if (p) updatedFilePaths.push(p)
-            },
-          },
-          {
-            name: `Update Expo tab file for ${newScreen.name}`,
-            action: async () => {
-              const p = await generateExpoTabFile(newScreen.name, newScreen.componentName, true)
-              if (p) updatedFilePaths.push(p)
-            },
-          },
-          {
-            name: `Update Next.js page file for ${newScreen.name}`,
-            action: async () => {
-              const p = await generateNextPageFile(newScreen.name, newScreen.componentName, true)
-              if (p) updatedFilePaths.push(p)
-            },
-          },
-        ]
-        for (const op of updateOps) {
-          const { confirmOp } = await inquirer.default.prompt([
-            {
-              type: 'confirm',
-              name: 'confirmOp',
-              message: `Confirm UPDATE: ${op.name}?`,
-              default: true,
-            },
-          ])
-          if (!confirmOp) {
-            allUpdateOpsConfirmed = false
-            console.log(`Operation "${op.name}" cancelled.`)
-            break
-          }
-          try {
-            await op.action()
-            changesEffectivelyMade = true
-          } catch (error) {
-            console.error(`Error during "${op.name}":`, error)
-            allUpdateOpsConfirmed = false
-            break
-          }
-        }
-        if (!allUpdateOpsConfirmed) break
-      }
-      if (allUpdateOpsConfirmed && (updatedFilePaths.length > 0 || ignoreNextConfigChange)) {
-        console.log('\nUpdate process completed!')
-        const { confirmCommitUpdates } = await inquirer.default.prompt([
-          {
-            type: 'confirm',
-            name: 'confirmCommitUpdates',
-            message: 'Commit these updates?',
-            default: true,
-          },
-        ])
-        if (confirmCommitUpdates) {
-           await commitChanges(`feat: update screens via nav-sync - ${updatedScreens.map(s=>s.newScreen.name).join(', ')}`, [...new Set([...updatedFilePaths, NAVIGATION_CONFIG_PATH])]);
-        }
-      } else if (!allUpdateOpsConfirmed) {
-        console.log('Update process cancelled.')
-        actionInProgress = false; return;
-      } else {
-        console.log('No files actually updated for update batch, but AST might have changed.');
-      }
-    }
-
-    // --- Handle Additions ---
-    if (newScreens.length > 0) {
-      const otherUncommittedChangesAdd = await checkUncommittedChanges()
-      if (otherUncommittedChangesAdd.length > 0) {
-        /* Git check */
-        console.warn(`Warning: There are ${otherUncommittedChangesAdd.length} other uncommitted changes. Please commit or stash them.`);
-        const { confirmDespiteChanges } = await inquirer.default.prompt([
-            { type: 'confirm', name: 'confirmDespiteChanges', message: 'Proceed with additions despite other uncommitted changes?', default: false }
-        ]);
-        if (!confirmDespiteChanges) {
-            console.log('Addition process cancelled.');
-            actionInProgress = false; return;
-        }
-      }
-
-      const generatedFilePaths = []
-      let allAdditionOpsConfirmed = true
-      for (const screen of newScreens) {
-        console.log(`\nProcessing ADDITION for screen: ${screen.name}`)
-        const additionOps = [
-          {
-            name: `Generate feature screen for ${screen.name}`,
-            action: async () => {
-              const p = await generateFeatureScreen(
-                screen.name,
-                screen.componentName,
-                screen.title || screen.name
-              )
-              if (p) generatedFilePaths.push(p)
-            },
-          },
-          {
-            name: `Generate Expo tab file for ${screen.name}`,
-            action: async () => {
-              const p = await generateExpoTabFile(screen.name, screen.componentName)
-              if (p) generatedFilePaths.push(p)
-            },
-          },
-          {
-            name: `Generate Next.js page file for ${screen.name}`,
-            action: async () => {
-              const p = await generateNextPageFile(screen.name, screen.componentName)
-              if (p) generatedFilePaths.push(p)
-            },
-          },
-        ]
-        for (const op of additionOps) {
-          const { confirmOp } = await inquirer.default.prompt([
-            {
-              type: 'confirm',
-              name: 'confirmOp',
-              message: `Confirm ADDITION: ${op.name}?`,
-              default: true,
-            },
-          ])
-          if (!confirmOp) {
-            allAdditionOpsConfirmed = false
-            console.log(`Operation "${op.name}" cancelled.`)
-            break
-          }
-          try {
-            await op.action()
-            changesEffectivelyMade = true
-          } catch (error) {
-            console.error(`Error during "${op.name}":`, error)
-            allAdditionOpsConfirmed = false
-            break
-          }
-        }
-        if (!allAdditionOpsConfirmed) break
-      }
-      if (!allAdditionOpsConfirmed) {
-        // Basic undo: attempt to delete files that were just generated in this failed batch
-        if (generatedFilePaths.length > 0) {
-            console.log("Attempting to revert generated files due to cancellation...");
-            for (const filePath of generatedFilePaths) {
-                try {
-                    if (await fs.pathExists(filePath)) {
-                        await fs.remove(filePath);
-                        console.log(`Reverted: Deleted ${filePath}`);
-                    }
-                } catch (undoError) {
-                    console.error(`Error reverting ${filePath}:`, undoError);
-                }
-            }
-        }
-        console.log('Addition process cancelled.')
-        actionInProgress = false; return;
-      }
-
-      if ((generatedFilePaths.length > 0 || ignoreNextConfigChange) && allAdditionOpsConfirmed) { // ensure all ops were confirmed
-        console.log('\nFile generation/update process for additions completed!')
-        // No need to ask "Do they work as expected?" if all individual steps were confirmed
-        const { shouldCommitNew } = await inquirer.default.prompt([
-          {
-            type: 'confirm',
-            name: 'shouldCommitNew',
-            message: 'Commit these addition changes?',
-            default: true,
-          },
-        ])
-        if (shouldCommitNew) {
-          await commitChanges(`feat: add new screens via nav-sync - ${newScreens.map(s=>s.name).join(', ')}`, [...new Set([...generatedFilePaths, NAVIGATION_CONFIG_PATH])]);
-        }
-        
-      } else if (allAdditionOpsConfirmed) { // All ops confirmed but no files generated (e.g. all overwrites skipped by user)
-        console.log('\nNo new files were generated for additions (possibly skipped overwrites), but AST might have changed.');
-         if (ignoreNextConfigChange) { // If only AST changed
-            const { shouldCommitASTOnly } = await inquirer.default.prompt([
-                { type: 'confirm', name: 'shouldCommitASTOnly', message: 'Commit layout.tsx changes for additions?', default: true }
+        }]);
+        if (confirmDeleteOps) {
+            const paths = await Promise.all([
+                deleteFeature(screen.name),
+                deleteExpoTabFile(screen.name),
+                deleteNextPage(screen.name)
             ]);
-            if (shouldCommitASTOnly) {
-                await commitChanges(`chore: update navigation structure for new screens (no files generated) - ${newScreens.map(s=>s.name).join(', ')}`, [NAVIGATION_CONFIG_PATH]);
-            }
+            paths.filter(p => p).forEach(p => deletedFilePaths.push(p));
+            if (paths.some(p => p)) changesEffectivelyMade = true;
+        } else {
+            console.log(`Skipped file deletions for screen '${screen.name}'.`);
         }
+      }
+      if (deletedFilePaths.length > 0) {
+        deletedFilePaths.forEach(p => allGeneratedOrModifiedFiles.add(p));
+        console.log('\nDeletion of files completed for this batch!')
       }
     }
 
-    if (changesEffectivelyMade || hasAnyChanges) { // hasAnyChanges ensures even if no files were made but AST was, we update state
-      lastAcknowledgedConfigState = { screens: configToProcessScreens } // Use the screens that were *intended* for processing
-      console.log(
-        "Snapshot `lastAcknowledgedConfigState` updated to current processed config's screens."
-      )
+    if (renamedScreens.length > 0) {
+        for (const { oldScreen, newScreen } of renamedScreens) {
+            console.log(`\nProcessing RENAME for '${oldScreen.name}' to '${newScreen.name}'`);
+            const { confirmRenameOps } = await inquirer.default.prompt([{
+                type: 'confirm',
+                name: 'confirmRenameOps',
+                message: `Confirm RENAME and REGENERATION of all associated files for '${oldScreen.name}' to '${newScreen.name}'?`,
+                default: true,
+            }]);
+            if (confirmRenameOps) {
+                await renameFeatureDirectory(oldScreen.name, newScreen.name);
+                await renameExpoTabFile(oldScreen.name, newScreen.name);
+                await renameNextPageDirectory(oldScreen.name, newScreen.name);
+
+                const paths = await Promise.all([
+                    generateFeatureScreen(newScreen.name, newScreen.componentName, newScreen.title || newScreen.name, true, true),
+                    generateExpoTabFile(newScreen.name, newScreen.componentName, true, true),
+                    generateNextPageFile(newScreen.name, newScreen.componentName, true, true)
+                ]);
+                paths.filter(p => p).forEach(p => allGeneratedOrModifiedFiles.add(p));
+                if (paths.some(p => p)) changesEffectivelyMade = true;
+            } else {
+                console.log(`Skipped file operations for rename of '${oldScreen.name}'.`);
+            }
+        }
+    }
+    
+    if (updatedScreens.length > 0) {
+        for (const { newScreen } of updatedScreens) { 
+            console.log(`\nProcessing UPDATE for screen: ${newScreen.name}`);
+             const { confirmUpdateOps } = await inquirer.default.prompt([{
+                type: 'confirm',
+                name: 'confirmUpdateOps',
+                message: `Confirm REGENERATION of files for screen '${newScreen.name}' due to content/component update?`,
+                default: true,
+            }]);
+            if (confirmUpdateOps) {
+                const paths = await Promise.all([
+                    generateFeatureScreen(newScreen.name, newScreen.componentName, newScreen.title || newScreen.name, true, true),
+                    generateExpoTabFile(newScreen.name, newScreen.componentName, true, true),
+                    generateNextPageFile(newScreen.name, newScreen.componentName, true, true)
+                ]);
+                paths.filter(p => p).forEach(p => allGeneratedOrModifiedFiles.add(p));
+                if (paths.some(p => p)) changesEffectivelyMade = true;
+            } else {
+                 console.log(`Skipped file regeneration for update of '${newScreen.name}'.`);
+            }
+        }
+    }
+
+    if (newScreens.length > 0) {
+        for (const screen of newScreens) {
+            console.log(`\nProcessing ADDITION for screen: ${screen.name}`);
+            const { confirmAddOps } = await inquirer.default.prompt([{
+                type: 'confirm',
+                name: 'confirmAddOps',
+                message: `Confirm generation of ALL associated files for new screen '${screen.name}'?`,
+                default: true,
+            }]);
+            if (confirmAddOps) {
+                const paths = await Promise.all([
+                    generateFeatureScreen(screen.name, screen.componentName, screen.title || screen.name, false, true),
+                    generateExpoTabFile(screen.name, screen.componentName, false, true),
+                    generateNextPageFile(screen.name, screen.componentName, false, true)
+                ]);
+                paths.filter(p => p).forEach(p => allGeneratedOrModifiedFiles.add(p));
+                if (paths.some(p => p)) changesEffectivelyMade = true;
+            } else {
+                console.log(`Skipped file generation for new screen '${screen.name}'.`);
+            }
+        }
+    }
+
+    if (changesEffectivelyMade || ignoreNextConfigChange) { 
+      lastAcknowledgedConfigState = { screens: configToProcessScreens }
+      console.log("Snapshot `lastAcknowledgedConfigState` updated.")
+      
+      const filesToCommit = [NAVIGATION_CONFIG_PATH, ...allGeneratedOrModifiedFiles];
+      const uniqueFiles = [...new Set(filesToCommit.filter(Boolean))];
+
+      if (uniqueFiles.length > 0) {
+        const { confirmCommit } = await inquirer.default.prompt([
+          {
+            type: 'confirm',
+            name: 'confirmCommit',
+            message: `Commit ${uniqueFiles.length} updated/generated/deleted file(s) related to navigation changes?`,
+            default: true,
+          },
+        ])
+        if (confirmCommit) {
+          await commitChanges(`sync: update navigation structure and associated files`, uniqueFiles);
+        }
+      }
     }
   } catch (error) {
     console.error('An error occurred during processBatchOfChanges:', error)
@@ -1361,178 +942,390 @@ async function processBatchOfChanges(configToProcessScreens) {
   }
 }
 
+// --- Project Consistency Validation ---
+function getLayoutImports(sourceFile) {
+  const imports = [];
+  if (!sourceFile) return imports; 
+  sourceFile.statements.forEach(statement => {
+    if (ts.isImportDeclaration(statement)) {
+      const moduleSpecifier = statement.moduleSpecifier;
+      if (ts.isStringLiteral(moduleSpecifier)) {
+        const importPath = moduleSpecifier.text;
+        const match = importPath.match(/^(?:\.\.\/){1,3}([a-zA-Z0-9_.-]+)\/screen$/);
+        if (match) {
+          const screenName = match[match.length-1]; 
+          if (statement.importClause && statement.importClause.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
+            statement.importClause.namedBindings.elements.forEach(element => {
+              imports.push({
+                componentName: element.name.text,
+                screenName: screenName, 
+              });
+            });
+          }
+        }
+      }
+    }
+  });
+  return imports;
+}
+
+async function getExistingFeatureScreens() {
+  const features = new Set();
+  if (!await fs.pathExists(FEATURES_PATH)) return features;
+  try {
+    const items = await fs.readdir(FEATURES_PATH);
+    for (const item of items) {
+      if ((await fs.stat(path.join(FEATURES_PATH, item))).isDirectory()) {
+        if (await fs.pathExists(path.join(FEATURES_PATH, item, 'screen.tsx'))) {
+          features.add(item);
+        }
+      }
+    }
+  } catch (e) { console.error("Error scanning feature screens:", e); }
+  return features;
+}
+
+async function getExistingExpoTabs() {
+  const tabs = new Set();
+  const expoTabsDir = path.join(EXPO_APP_PATH, '(tabs)');
+  if (!await fs.pathExists(expoTabsDir)) return tabs;
+  try {
+    const items = await fs.readdir(expoTabsDir);
+    for (const item of items) {
+      // FIX: Ignore _layout.tsx
+      if (item.endsWith('.tsx') && item !== '_layout.tsx') {
+        tabs.add(item.replace('.tsx', ''));
+      }
+    }
+  } catch (e) { console.error("Error scanning expo tabs:", e); }
+  return tabs;
+}
+
+async function getExistingNextPages() {
+  const pages = new Set();
+  const nextPagesDir = path.join(NEXT_APP_PATH, '(tabs)');
+  if (!await fs.pathExists(nextPagesDir)) return pages;
+  try {
+    const items = await fs.readdir(nextPagesDir);
+    for (const item of items) {
+      if ((await fs.stat(path.join(nextPagesDir, item))).isDirectory()) {
+        if (await fs.pathExists(path.join(nextPagesDir, item, 'page.tsx'))) {
+          pages.add(item);
+        }
+      }
+    }
+  } catch (e) { console.error("Error scanning next pages:", e); }
+  return pages;
+}
+
+async function validateProjectConsistency(declaredScreens, layoutSourceFile, isInteractive = true) {
+  console.log("🕵️ Running project consistency validation...");
+  let fixesAppliedThisRun = false;
+  let astModifiedThisRun = false;
+  const proposedFixes = []; 
+
+  if (!declaredScreens || !layoutSourceFile) {
+    console.error("Validation error: Missing declaredScreens or layoutSourceFile.");
+    return { fixesApplied: false, astModified: false };
+  }
+
+  const declaredScreenNames = new Set(declaredScreens.map(s => s.name));
+
+  const actualFeatureScreens = await getExistingFeatureScreens();
+  const actualExpoTabs = await getExistingExpoTabs();
+  const actualNextPages = await getExistingNextPages();
+  const actualImports = getLayoutImports(layoutSourceFile); 
+
+  for (const screen of declaredScreens) {
+    if (!screen.name || !screen.componentName) {
+        console.warn(`Validator: Skipping screen with missing name or componentName: ${JSON.stringify(screen)}`);
+        continue;
+    }
+    if (!actualFeatureScreens.has(screen.name)) {
+      proposedFixes.push({
+        description: `Screen '${screen.name}': Missing feature file.`,
+        action: async () => generateFeatureScreen(screen.name, screen.componentName, screen.title || screen.name, false, true),
+        type: 'file', fixType: 'generate_feature'
+      });
+    }
+    if (!actualExpoTabs.has(screen.name)) {
+      proposedFixes.push({
+        description: `Screen '${screen.name}': Missing Expo tab file.`,
+        action: async () => generateExpoTabFile(screen.name, screen.componentName, false, true),
+        type: 'file', fixType: 'generate_expo'
+      });
+    }
+    if (!actualNextPages.has(screen.name)) {
+      proposedFixes.push({
+        description: `Screen '${screen.name}': Missing Next.js page file.`,
+        action: async () => generateNextPageFile(screen.name, screen.componentName, false, true),
+        type: 'file', fixType: 'generate_next'
+      });
+    }
+    
+    const hasCorrectImport = actualImports.some(imp => imp.componentName === screen.componentName && imp.screenName === screen.name);
+    if (!hasCorrectImport) {
+      proposedFixes.push({
+        description: `Screen '${screen.name}': Missing import for component '${screen.componentName}'.`,
+        type: 'ast', fixType: 'add_import', screenData: { componentName: screen.componentName, screenName: screen.name }
+      });
+    }
+  }
+
+  actualFeatureScreens.forEach(name => {
+    if (!declaredScreenNames.has(name)) {
+      proposedFixes.push({
+        description: `Orphaned feature: 'packages/app/features/${name}'.`,
+        action: async () => deleteFeature(name), type: 'file', fixType: 'delete_feature'
+      });
+    }
+  });
+  actualExpoTabs.forEach(name => {
+    if (!declaredScreenNames.has(name)) {
+      proposedFixes.push({
+        description: `Orphaned Expo tab: 'apps/expo/app/(tabs)/${name}.tsx'.`,
+        action: async () => deleteExpoTabFile(name), type: 'file', fixType: 'delete_expo'
+      });
+    }
+  });
+  actualNextPages.forEach(name => {
+    if (!declaredScreenNames.has(name)) {
+      proposedFixes.push({
+        description: `Orphaned Next.js page: 'apps/next/app/(tabs)/${name}'.`,
+        action: async () => deleteNextPage(name), type: 'file', fixType: 'delete_next'
+      });
+    }
+  });
+
+  actualImports.forEach(imp => {
+    const isUsedByDeclaredScreen = declaredScreens.some(s => s.componentName === imp.componentName && s.name === imp.screenName);
+    if (!isUsedByDeclaredScreen) {
+      proposedFixes.push({
+        description: `Orphaned import: Component '${imp.componentName}' from '../${imp.screenName}/screen'.`,
+        type: 'ast', fixType: 'remove_import', screenData: { componentName: imp.componentName, screenName: imp.screenName }
+      });
+    }
+  });
+
+  if (proposedFixes.length === 0) {
+    console.log("✅ Project consistency validation passed. No discrepancies found.");
+    return { fixesApplied: false, astModified: false };
+  }
+
+  console.warn("\nProject Consistency Discrepancies Found:");
+  const choices = proposedFixes.map((fix, index) => ({
+      name: `${fix.description} (Action: ${fix.fixType.replace(/_/g, ' ')})`,
+      value: index,
+      checked: true // Pre-select all fixes
+  }));
+
+  if (!isInteractive) {
+    console.log("Non-interactive mode. Skipping automatic fixes. Discrepancies listed above.");
+    return { fixesApplied: false, astModified: false };
+  }
+
+  const { selectedFixIndices } = await inquirer.default.prompt([
+    {
+      type: 'checkbox',
+      name: 'selectedFixIndices',
+      message: 'Select fixes to apply:',
+      choices: choices,
+      pageSize: Math.min(choices.length, 20)
+    },
+  ]);
+
+  if (!selectedFixIndices || selectedFixIndices.length === 0) {
+    console.log("No fixes selected by user.");
+    return { fixesApplied: false, astModified: false };
+  }
+
+  const astActionsForBatch = { importsToAdd: [], importsToRemove: [], screensToAdd: [], screenNamesToDelete: [], clearCommands: false };
+
+  for (const index of selectedFixIndices) {
+    const fix = proposedFixes[index];
+    console.log(`Applying: ${fix.description}`);
+    if (fix.type === 'file' && fix.action) {
+      try {
+        await fix.action();
+        fixesAppliedThisRun = true;
+      } catch (e) { console.error(`Error applying file fix: ${fix.description}`, e); }
+    } else if (fix.type === 'ast') {
+      if (fix.fixType === 'add_import' && fix.screenData) {
+        astActionsForBatch.importsToAdd.push(fix.screenData);
+      } else if (fix.fixType === 'remove_import' && fix.screenData) {
+        astActionsForBatch.importsToRemove.push(fix.screenData);
+      }
+    }
+  }
+
+  if (astActionsForBatch.importsToAdd.length > 0 || astActionsForBatch.importsToRemove.length > 0) {
+    console.log("Applying batched AST modifications for imports...");
+    try {
+        await modifyLayoutFileWithAst(astActionsForBatch);
+        astModifiedThisRun = true;
+        fixesAppliedThisRun = true;
+    } catch (e) { console.error("Error applying AST fixes:", e); }
+  }
+
+  if (fixesAppliedThisRun) {
+    console.log("Consistency fixes applied. It's recommended to review changes.");
+  } else {
+    console.log("No fixes were applied from selection.");
+  }
+  return { fixesApplied: fixesAppliedThisRun, astModified: astModifiedThisRun };
+}
+// --- End Project Consistency Validation ---
+
+
 async function onConfigFileChanged(changedPath) {
   if (actionInProgress) {
-    console.log(
-      'An operation batch is already in progress. Queuing re-evaluation for after completion...'
-    )
+    console.log('An operation batch is already in progress. Queuing re-evaluation for after completion...')
     reevaluateAfterCompletion = true
     return
   }
 
   if (changedPath === NAVIGATION_CONFIG_PATH && ignoreNextConfigChange) {
     console.log('Ignoring this config change as it was programmatic.')
-    ignoreNextConfigChange = false // Reset for next manual change
-    // Update lastAcknowledgedConfigState here if the programmatic change was successful
-    // This ensures that the state right after programmatic change is the baseline
+    ignoreNextConfigChange = false
     try {
         const updatedConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
         if (updatedConfig && updatedConfig.screens) {
             lastAcknowledgedConfigState = { screens: updatedConfig.screens };
             console.log("Refreshed lastAcknowledgedConfigState after programmatic change.");
         }
-    } catch (e) {
-        console.error("Error refreshing lastAcknowledgedConfigState after programmatic change:", e);
-    }
+    } catch (e) { console.error("Error refreshing lastAcknowledgedConfigState:", e); }
     return
   }
 
   console.log(`Change detected in ${NAVIGATION_CONFIG_PATH}. Parsing...`)
-  const parsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
+  let parsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
 
   if (!parsedResult) {
     console.warn('Could not parse navigation config. Waiting for next valid change.')
-    editingModeActive = false // Reset editing mode if parsing fails
+    editingModeActive = false
     return
   }
 
-  let { screens: currentScreensFromFile, isAutoSaveOn, isEditing, commandsToExecute } = parsedResult
+  let { screens: currentScreensFromFile, isAutoSaveOn, isEditing, commandsToExecute, sourceFile: currentSourceFile } = parsedResult
   console.log(`Parsed flags from file: isAutoSaveOn=${isAutoSaveOn}, isEditing=${isEditing}`)
-  const hasPendingCliCommands =
-    commandsToExecute && (commandsToExecute.add?.length > 0 || commandsToExecute.delete?.length > 0)
-  if (hasPendingCliCommands) {
-    console.log(
-      `Parsed commands from file: add: ${commandsToExecute.add?.length || 0}, delete: ${commandsToExecute.delete?.length || 0}`
-    )
-  }
+  const hasPendingCliCommands = commandsToExecute && (commandsToExecute.add?.length > 0 || commandsToExecute.delete?.length > 0)
 
-  // --- Editing Mode Logic ---
   if (isAutoSaveOn) {
-    if (isEditing && !hasPendingCliCommands) { // Only enter/stay in editing mode if autosave is on, isEditing is true, AND no commands are pending
+    if (isEditing && !hasPendingCliCommands) {
       if (!editingModeActive) {
-        console.log(
-          'Autosave ON and `isEditing` is true (no pending commands). Entering editing mode. Waiting for `isEditing` to become false or commands to be added in layout.tsx to process changes.'
-        )
+        console.log('Autosave ON, `isEditing` true (no commands). Entering editing mode.')
         editingModeActive = true
       } else {
-        console.log(
-          'Autosave ON and `isEditing` is true (no pending commands). Still in editing mode, waiting for `isEditing` to become false or commands.'
-        )
+        console.log('Still in editing mode (Autosave ON, `isEditing` true, no commands).')
       }
-      return // Don't process further if in pure editing mode without commands
-    } else { // This block means either isEditing became false, or autosave is on but isEditing is false, or commands are present
-      if (editingModeActive && !isEditing) { // Exited editing mode
-        console.log('`isEditing` is now false. Processing changes (including any commands).')
+      return
+    } else {
+      if (editingModeActive && !isEditing) {
+        console.log('`isEditing` is now false. Processing changes.')
         editingModeActive = false
-      } else if (!editingModeActive && !isEditing && isAutoSaveOn) { // Autosave on, but was never in editing mode (e.g. initial state or quick toggle)
-         console.log('Autosave ON, `isEditing` is false. Processing changes (including any commands).');
+      } else if (!editingModeActive && !isEditing && isAutoSaveOn) {
+         console.log('Autosave ON, `isEditing` false. Processing changes.');
       }
-      // If hasPendingCliCommands, it will be processed regardless of editingModeActive state.
     }
-  } else { // Autosave is OFF
-    if (editingModeActive) { // If it was previously in editing mode
-      console.log('Autosave turned OFF. Exiting editing mode and processing changes (including any commands).')
+  } else {
+    if (editingModeActive) {
+      console.log('Autosave OFF. Exiting editing mode and processing changes.')
       editingModeActive = false
     }
-    // If autosave is off and not previously in editing mode, changes are processed directly (including commands).
   }
 
-
-  // --- Process CommandsToExecute if present ---
+  let astActuallyModifiedByCommands = false;
   if (hasPendingCliCommands) {
     console.log('Applying commands from `commandsToExecute` in layout.tsx...')
-    actionInProgress = true; // Set flag before AST modification
-
-    // Sanitize and prepare commands
+    
     const processedCmdsAdd = (commandsToExecute.add || []).map(cmd => {
       if (!cmd.name || typeof cmd.name !== 'string') {
-        console.warn(`AST: Invalid or missing screen name in commandsToExecute.add. Skipping command: ${JSON.stringify(cmd)}`);
-        return null;
+        console.warn(`AST: Invalid cmd name. Skipping: ${JSON.stringify(cmd)}`); return null;
       }
       const sanitizedName = cmd.name.toLowerCase().replace(/[^a-z0-9_]/gi, '');
       if (!sanitizedName) {
-        console.warn(`AST: Invalid screen name "${cmd.name}" (sanitized to empty) in commandsToExecute.add. Skipping this command.`);
-        return null;
+        console.warn(`AST: Invalid screen name "${cmd.name}" (empty after sanitize). Skipping.`); return null;
       }
-
       let componentName = cmd.componentName;
       if (!componentName || typeof componentName !== 'string' || !/^[a-zA-Z_$][a-zA-Z\d_$]*$/.test(componentName)) {
-        if (componentName) {
-          console.warn(`AST: Invalid componentName "${componentName}" for screen "${cmd.name}" in commandsToExecute.add. Using default derived from sanitized name "${sanitizedName}".`);
-        }
+        if (componentName) console.warn(`AST: Invalid componentName "${componentName}". Using default for "${sanitizedName}".`);
         componentName = capitalizeFirstLetter(sanitizedName) + 'Screen';
       }
-
-      return {
-        name: sanitizedName,
-        componentName: componentName,
-        title: cmd.title || capitalizeFirstLetter(sanitizedName),
-        icon: cmd.icon || sanitizedName.toLowerCase(),
-      };
+      return { name: sanitizedName, componentName, title: cmd.title || capitalizeFirstLetter(sanitizedName), icon: cmd.icon || sanitizedName.toLowerCase() };
     }).filter(cmd => cmd !== null);
 
     const actionsForAst = {
       screensToAdd: processedCmdsAdd,
-      screenNamesToDelete: (commandsToExecute.delete || []).map(cmd => ({ name: cmd.name })), // cmd.name is original here for matching
-      importsToAdd: processedCmdsAdd.map(cmd => ({
-        componentName: cmd.componentName,
-        screenName: cmd.name, // This is the sanitized name
-      })),
+      screenNamesToDelete: (commandsToExecute.delete || []).map(cmd => ({ name: cmd.name })),
+      importsToAdd: processedCmdsAdd.map(cmd => ({ componentName: cmd.componentName, screenName: cmd.name })),
       importsToRemove: [],
       clearCommands: true,
     };
 
-    const currentParsedForCmds = await parseNavigationConfig(NAVIGATION_CONFIG_PATH); // Re-parse to get latest component names for deletion
+    const currentParsedForCmds = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
     if (currentParsedForCmds && currentParsedForCmds.screens) {
       actionsForAst.importsToRemove = (commandsToExecute.delete || [])
         .map((cmdToDelete) => {
           const screenInLayout = currentParsedForCmds.screens.find((s) => s.name === cmdToDelete.name);
-          let componentNameToRemove = cmdToDelete.componentName;
-          if (!componentNameToRemove && screenInLayout) {
-            componentNameToRemove = screenInLayout.componentName;
-          }
-
-          if (componentNameToRemove && /^[a-zA-Z_$][a-zA-Z\d_$]*$/.test(componentNameToRemove)) {
-            return { componentName: componentNameToRemove };
-          } else if (componentNameToRemove) {
-            console.warn(`AST: Invalid or unresolvable componentName for screen deletion command for "${cmdToDelete.name}". Cannot reliably determine import to remove.`);
-          }
+          let cn = cmdToDelete.componentName || (screenInLayout ? screenInLayout.componentName : null);
+          if (cn && /^[a-zA-Z_$][a-zA-Z\d_$]*$/.test(cn)) return { componentName: cn };
+          if (cn) console.warn(`AST: Invalid componentName "${cn}" for delete cmd "${cmdToDelete.name}".`);
           return null;
-        })
-        .filter(imp => imp !== null && imp.componentName);
+        }).filter(Boolean);
     }
     
-    try {
+    if (actionsForAst.screensToAdd.length > 0 || actionsForAst.screenNamesToDelete.length > 0 || actionsForAst.importsToAdd.length > 0 || actionsForAst.importsToRemove.length > 0) {
         await modifyLayoutFileWithAst(actionsForAst);
-        // After successful AST modification, re-parse to get the true current state
-        const finalParsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
-        if (!finalParsedResult || !finalParsedResult.screens) {
-          console.error('Failed to re-parse layout.tsx after applying commands. Aborting further processing for this change.');
-          actionInProgress = false;
+        astActuallyModifiedByCommands = true;
+        parsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH); // Re-assign
+        if (!parsedResult || !parsedResult.screens) {
+          console.error('Failed to re-parse layout.tsx after applying commands. Aborting further processing.');
           return;
         }
-        currentScreensFromFile = finalParsedResult.screens; // This is the crucial update
-        // lastAcknowledgedConfigState should also be updated to this state before processBatchOfChanges
-        // so that identifyChanges compares against the state *after* commands were applied by AST.
+        currentScreensFromFile = parsedResult.screens;
+        currentSourceFile = parsedResult.sourceFile; 
         lastAcknowledgedConfigState = { screens: currentScreensFromFile };
-        console.log("Applied commands and updated lastAcknowledgedConfigState. Proceeding to process file changes.");
-
-    } catch (astError) {
-        console.error("Error during AST modification for commandsToExecute:", astError);
-        actionInProgress = false;
-        return; // Don't proceed if AST modification fails
-    } finally {
-        // actionInProgress will be reset by processBatchOfChanges or if an error occurs above
+        console.log("Applied commands from layout.tsx and updated internal state.");
+    } else if (actionsForAst.clearCommands && (commandsToExecute.add?.length > 0 || commandsToExecute.delete?.length > 0)) {
+        console.log("Clearing empty or ineffective commandsToExecute from layout.tsx.");
+        await modifyLayoutFileWithAst({ clearCommands: true });
+        astActuallyModifiedByCommands = true;
+         parsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH); 
+        if (parsedResult) { 
+             currentScreensFromFile = parsedResult.screens;
+             currentSourceFile = parsedResult.sourceFile;
+             lastAcknowledgedConfigState = { screens: currentScreensFromFile };
+        }
+    } else {
+        console.log("No effective AST changes from commandsToExecute.");
     }
   }
-   // Reset actionInProgress here if it was set for commands and processBatchOfChanges is not called,
-   // or ensure processBatchOfChanges always resets it.
-   // Given processBatchOfChanges is called next and has its own actionInProgress logic, this might be okay.
 
-  // --- Process actual file content changes (potentially after commands were applied) ---
-  // The `currentScreensFromFile` now reflects the state *after* any `commandsToExecute` have been applied to the AST and file.
   await processBatchOfChanges(currentScreensFromFile);
-  // actionInProgress is reset inside processBatchOfChanges
+
+  if (!actionInProgress) { 
+    console.log("Running post-change consistency validation...");
+    const latestConfigForValidation = (astActuallyModifiedByCommands || (changedPath === NAVIGATION_CONFIG_PATH && !ignoreNextConfigChange))
+                                      ? await parseNavigationConfig(NAVIGATION_CONFIG_PATH) 
+                                      : parsedResult; 
+
+    if (latestConfigForValidation && latestConfigForValidation.screens && latestConfigForValidation.sourceFile) {
+        const validationResult = await validateProjectConsistency(latestConfigForValidation.screens, latestConfigForValidation.sourceFile);
+        if (validationResult.astModified) {
+            const finalConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+            if (finalConfig && finalConfig.screens) {
+                lastAcknowledgedConfigState = { screens: finalConfig.screens };
+            }
+        } else if (validationResult.fixesApplied) { 
+             const finalConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+            if (finalConfig && finalConfig.screens) {
+                lastAcknowledgedConfigState = { screens: finalConfig.screens };
+            }
+        }
+    } else {
+        console.warn("Could not get latest config for post-change validation. Parsed result:", latestConfigForValidation);
+    }
+  }
 }
 
 // --- Main Execution (CLI command parsing) ---
@@ -1540,18 +1333,32 @@ async function main() {
   const args = process.argv.slice(2)
   const command = args[0]
 
+  let initialConfigResult;
   try {
-    const initialConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
-    if (initialConfig && initialConfig.screens) {
-      lastAcknowledgedConfigState = { screens: initialConfig.screens }
-      console.log('Initial navigation config (screens part) parsed and stored for CLI session.')
+    initialConfigResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+    if (initialConfigResult && initialConfigResult.screens && initialConfigResult.sourceFile) {
+      lastAcknowledgedConfigState = { screens: initialConfigResult.screens };
+      console.log('Initial navigation config (screens part) parsed and stored.');
+
+      console.log('Performing initial project consistency validation...');
+      const validationResult = await validateProjectConsistency(initialConfigResult.screens, initialConfigResult.sourceFile);
+      if (validationResult.astModified || validationResult.fixesApplied) { 
+        console.log("Consistency fixes applied during startup. Re-parsing config...");
+        const updatedConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+        if (updatedConfig && updatedConfig.screens) {
+          lastAcknowledgedConfigState = { screens: updatedConfig.screens };
+          initialConfigResult = updatedConfig; 
+        } else {
+          console.error("Failed to re-parse config after initial validation fixes.");
+        }
+      }
     } else {
-      console.error('Failed to parse initial config for CLI session. Please check the file.')
-      lastAcknowledgedConfigState = { screens: [] } // Ensure it's initialized
+      console.error('Failed to parse initial config or sourceFile for CLI session. Please check the file.')
+      lastAcknowledgedConfigState = { screens: [] }
     }
   } catch (err) {
     console.error('Error during initial config parse for CLI session:', err)
-    lastAcknowledgedConfigState = { screens: [] } // Ensure it's initialized
+    lastAcknowledgedConfigState = { screens: [] }
   }
 
   if (command === 'add' || command === 'delete') {
@@ -1560,58 +1367,51 @@ async function main() {
       console.error(`Please provide at least one screen name for the '${command}' command.`)
       process.exit(1)
     }
-    // commented out so the file watcher can start add/delete processes after the cli command updates navigation/layout.tsx
-    // actionInProgress = true; // Set before potentially long async operations
     await handleDirectCliCommands(command, screenNames);
-    // actionInProgress = false; // Reset after command handled
+    
+    const postCliConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+    if (postCliConfig && postCliConfig.screens && postCliConfig.sourceFile) {
+        console.log("Running post-CLI command consistency validation...");
+        const validationResult = await validateProjectConsistency(postCliConfig.screens, postCliConfig.sourceFile);
+        if (validationResult.astModified || validationResult.fixesApplied) {
+             const finalConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH);
+             if (finalConfig && finalConfig.screens) {
+                lastAcknowledgedConfigState = { screens: finalConfig.screens };
+            }
+        }
+    } else {
+        console.warn("Could not get latest config for post-CLI validation.");
+    }
+
   } else if (command) {
-    console.log(
-      `Unknown command: ${command}. Available commands: add, delete. Or run without commands for watcher mode.`
-    )
+    console.log(`Unknown command: ${command}. Available commands: add, delete. Or run without commands for watcher mode.`)
     process.exit(1)
   } else {
     // --- Watcher Setup (Default mode) ---
     console.log(`Watching for changes in ${NAVIGATION_CONFIG_PATH}...`)
     const watcher = chokidar.watch(NAVIGATION_CONFIG_PATH, {
       persistent: true,
-      ignoreInitial: true, // Don't run on initial add
-      awaitWriteFinish: {
-        stabilityThreshold: 1000, // Wait 1s for more changes
-        pollInterval: 100,
-      },
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 1000, pollInterval: 100 },
     })
 
     watcher.on('change', (filePath) => onConfigFileChanged(filePath))
     watcher.on('error', (error) => console.error(`Watcher error: ${error}`))
 
-    // Check initial flags for watcher mode startup
-    if (lastAcknowledgedConfigState && lastAcknowledgedConfigState.screens) { // ensure initial parse was somewhat successful
-      parseNavigationConfig(NAVIGATION_CONFIG_PATH).then((currentFlagsConfig) => {
-        if (currentFlagsConfig) { // Check if parseNavigationConfig returned a result
-          console.log(
-            `Initial flags for watcher: isAutoSaveOn=${currentFlagsConfig.isAutoSaveOn}, isEditing=${currentFlagsConfig.isEditing}`
-          )
-          const hasPendingCommands = currentFlagsConfig.commandsToExecute && 
-                                     (currentFlagsConfig.commandsToExecute.add?.length > 0 || currentFlagsConfig.commandsToExecute.delete?.length > 0);
+    if (initialConfigResult) { 
+        console.log(`Initial flags for watcher: isAutoSaveOn=${initialConfigResult.isAutoSaveOn}, isEditing=${initialConfigResult.isEditing}`)
+        const hasPendingCommands = initialConfigResult.commandsToExecute && 
+                                   (initialConfigResult.commandsToExecute.add?.length > 0 || initialConfigResult.commandsToExecute.delete?.length > 0);
 
-          if (currentFlagsConfig.isAutoSaveOn && currentFlagsConfig.isEditing && !hasPendingCommands) {
-            editingModeActive = true
-            console.log(
-              'Started in editing mode due to initial flags in config file (watcher mode, no pending commands).'
-            )
-          } else if (hasPendingCommands) {
-            console.log("Pending commands detected on startup. Triggering initial processing.");
-            onConfigFileChanged(NAVIGATION_CONFIG_PATH); // Trigger processing if commands are already there
-          } else if (!currentFlagsConfig.isAutoSaveOn || !currentFlagsConfig.isEditing) {
-            // If not starting in editing mode, and no commands, potentially trigger a reconcile if state differs.
-            // However, current logic processes any detected change on first save.
-            // For now, just log.
-            console.log("Watcher started. Not in editing mode and no pending commands on startup.");
-          }
+        if (initialConfigResult.isAutoSaveOn && initialConfigResult.isEditing && !hasPendingCommands) {
+          editingModeActive = true
+          console.log('Started in editing mode (watcher mode, no pending commands).')
+        } else if (hasPendingCommands) {
+          console.log("Pending commands detected on startup. Triggering initial processing for watcher.");
+          onConfigFileChanged(NAVIGATION_CONFIG_PATH);
+        } else {
+          console.log("Watcher started. Not in editing mode and no pending commands on startup.");
         }
-      }).catch(err => {
-        console.error("Error parsing initial flags for watcher mode:", err);
-      });
     }
     console.log('CLI tool started in watcher mode. Press Ctrl+C to exit.')
   }
@@ -1627,13 +1427,8 @@ async function handleDirectCliCommands(command, screenNames) {
       return
     }
 
-    const actions = {
-      screensToAdd: [],
-      screenNamesToDelete: [], // Will be array of objects { name: string, componentName?: string }
-      importsToAdd: [],
-      importsToRemove: [], // Will be array of objects { componentName: string }
-      clearCommands: false, // Not clearing commands in direct CLI mode usually
-    }
+    const actions = { screensToAdd: [], screenNamesToDelete: [], importsToAdd: [], importsToRemove: [], clearCommands: false, }
+    let astChangedByCli = false;
 
     if (command === 'add') {
       console.log(`Preparing to add screens: ${screenNames.join(', ')} to layout.tsx...`)
@@ -1644,133 +1439,68 @@ async function handleDirectCliCommands(command, screenNames) {
           console.warn(`Invalid screen name argument (sanitized to empty): "${screenNameArg}". Skipping.`)
           continue
         }
-
         let name = sanitizedNameBase
         let componentName = capitalizeFirstLetter(name) + 'Screen'
         let title = capitalizeFirstLetter(name)
         let icon = name.toLowerCase()
 
-        const { confirmDefault } = await inquirer.default.prompt([
-          {
-            type: 'confirm',
-            name: 'confirmDefault',
-            message: `Use default config for '${name}' (Component: ${componentName}, Title: ${title})?`,
-            default: true,
-          },
-        ])
+        const { confirmDefault } = await inquirer.default.prompt([{ type: 'confirm', name: 'confirmDefault', message: `Use default config for '${name}' (Component: ${componentName}, Title: ${title})?`, default: true,},])
         if (!confirmDefault) {
           const answers = await inquirer.default.prompt([
-            {
-              type: 'input',
-              name: 'name',
-              message: 'Enter screen name (lowercase, valid for paths/identifiers):',
-              default: name,
-              validate: (input) =>
-                /^[a-z0-9_]+$/.test(input)
-                  ? true
-                  : 'Please use lowercase letters, numbers, and underscores only.',
-            },
-            {
-              type: 'input',
-              name: 'componentName',
-              message: 'Enter ComponentName (e.g., MyScreenComponent):',
-              default: componentName,
-              validate: (input) =>
-                /^[A-Z][a-zA-Z0-9_]*Screen$/.test(input) // Allow underscore in component name
-                  ? true
-                  : 'Must be PascalCase ending with Screen (e.g. MyExampleScreen, My_ExampleScreen)',
-            },
-            {
-              type: 'input',
-              name: 'title',
-              message: 'Enter screen title (for header/tab label):',
-              default: title,
-            },
-            {
-              type: 'input',
-              name: 'icon',
-              message: 'Enter tabBarIconName (e.g., home, settings):',
-              default: icon,
-            },
+            { type: 'input', name: 'name', message: 'Screen name (lowercase, path-safe):', default: name, validate: (input) => /^[a-z0-9_]+$/.test(input) ? true : 'Lowercase letters, numbers, underscores only.', },
+            { type: 'input', name: 'componentName', message: 'ComponentName (PascalCase, e.g. MyScreen):', default: componentName, validate: (input) => /^[A-Z][a-zA-Z0-9_]*Screen$/.test(input) ? true : 'PascalCase ending with Screen.', },
+            { type: 'input', name: 'title', message: 'Screen title (header/tab label):', default: title, },
+            { type: 'input', name: 'icon', message: 'tabBarIconName (e.g., home):', default: icon, },
           ])
-          name = answers.name
-          componentName = answers.componentName
-          title = answers.title
-          icon = answers.icon
+          name = answers.name; componentName = answers.componentName; title = answers.title; icon = answers.icon
         }
-
         const existingScreen = initialParsed.screens.find((s) => s.name === name)
         if (!existingScreen) {
           actions.screensToAdd.push({ name, componentName, title, icon })
           actions.importsToAdd.push({ componentName, screenName: name })
+          astChangedByCli = true;
         } else {
-          console.log(`Screen '${name}' already exists in configuration. Skipping addition.`)
+          console.log(`Screen '${name}' already in config. Skipping AST add.`)
         }
       }
     } else if (command === 'delete') {
       console.log(`Preparing to delete screens: ${screenNames.join(', ')} from layout.tsx...`)
       for (const screenNameToDelete of screenNames) {
-        // For CLI delete, screenNameToDelete might need sanitization if we want to be lenient,
-        // but typically users specify the exact name from the config.
-        // Let's assume screenNameToDelete is the exact name as in the config.
         const screenToDelete = initialParsed.screens.find((s) => s.name === screenNameToDelete)
         if (!screenToDelete) {
-          console.warn(
-            `Screen '${screenNameToDelete}' not found in current config. Skipping its deletion from AST.`
-          )
+          console.warn(`Screen '${screenNameToDelete}' not in config. Skipping AST delete.`)
           continue
         }
         console.log(`\nDetails of screen to delete: ${JSON.stringify(screenToDelete, null, 2)}`)
-        const { confirmDelete } = await inquirer.default.prompt([
-          {
-            type: 'confirm',
-            name: 'confirmDelete',
-            message: `Confirm removal of screen '${screenNameToDelete}' from layout.tsx?`,
-            default: true,
-          },
-        ])
-
+        const { confirmDelete } = await inquirer.default.prompt([{type: 'confirm',name: 'confirmDelete',message: `Confirm removal of screen '${screenNameToDelete}' from layout.tsx?`,default: true,},])
         if (!confirmDelete) {
-          console.log(`Skipped removal of '${screenNameToDelete}' from layout.tsx.`)
+          console.log(`Skipped AST removal of '${screenNameToDelete}'.`)
           continue
         }
-        // Pass the whole screen object for componentName access in AST modification if needed,
-        // or just name if AST part only needs name. The current AST delete needs {name: string}.
         actions.screenNamesToDelete.push({ name: screenToDelete.name })
         if (screenToDelete.componentName && /^[a-zA-Z_$][a-zA-Z\d_$]*$/.test(screenToDelete.componentName)) {
             actions.importsToRemove.push({ componentName: screenToDelete.componentName })
         } else if (screenToDelete.componentName) {
             console.warn(`AST: Component name "${screenToDelete.componentName}" for screen "${screenToDelete.name}" is invalid. Import may not be removed correctly.`);
         }
+        astChangedByCli = true;
         console.log(`Prepared AST deletion of '${screenNameToDelete}'.`)
       }
     }
 
-    if (actions.screensToAdd.length > 0 || actions.screenNamesToDelete.length > 0) {
-      await modifyLayoutFileWithAst(actions) // This will also handle imports
-      console.log(`layout.tsx AST updated programmatically for command: ${command}.`)
+    if (astChangedByCli) {
+      await modifyLayoutFileWithAst(actions)
+      console.log(`layout.tsx AST updated programmatically by CLI command: ${command}.`)
     } else {
-      console.log('No effective changes to make to layout.tsx from CLI command.')
-      // If no AST changes, no need to call processBatchOfChanges unless we want to trigger file generation for some reason
-      // For now, if no AST changes, we assume no further processing needed for direct CLI.
-      return;
+      console.log('No AST changes made by CLI command.')
     }
 
-    // Re-parse the config to get the state *after* AST modification by CLI command
-    // and then process those changes (e.g., generate files for new screens)
     const finalParsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
     if (finalParsedResult && finalParsedResult.screens) {
-      // Update lastAcknowledgedConfigState to reflect the state *before* CLI-induced changes were processed by processBatchOfChanges.
-      // Or rather, processBatchOfChanges should compare against the state *before* the CLI command *modified* the AST.
-      // `initialParsed.screens` is the state before `modifyLayoutFileWithAst`.
-      // `finalParsedResult.screens` is the state after `modifyLayoutFileWithAst`.
-      // So, `identifyChanges` should compare `finalParsedResult.screens` (new) vs `initialParsed.screens` (old).
-      lastAcknowledgedConfigState = { screens: initialParsed.screens }; // Set old state
-      await processBatchOfChanges(finalParsedResult.screens); // Pass new state
+      lastAcknowledgedConfigState = { screens: initialParsed.screens }; 
+      await processBatchOfChanges(finalParsedResult.screens);
     } else {
-      console.error(
-        'Failed to parse config after programmatic update by CLI command. Aborting file processing.'
-      )
+      console.error('Failed to parse config after CLI command. Aborting file processing.')
     }
   } catch (error) {
     console.error(`Error during 'handleDirectCliCommands' for ${command}:`, error)

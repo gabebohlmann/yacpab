@@ -22,11 +22,13 @@ const FEATURES_PATH = path.join(MONOREPO_ROOT, 'packages/app/features')
 const EXPO_APP_PATH = path.join(MONOREPO_ROOT, 'apps/expo/app')
 const NEXT_APP_PATH = path.join(MONOREPO_ROOT, 'apps/next/app')
 
-let lastAcknowledgedConfigState = null
-let actionInProgress = false
-let ignoreNextConfigChange = false
-let reevaluateAfterCompletion = false
-let manualReevaluationScheduledByDecline = false
+let lastAcknowledgedConfigState = null // Snapshot of the last fully processed or acknowledged config's *screens*
+let actionInProgress = false // True if a batch of operations (prompts, file I/O) is active
+let ignoreNextConfigChange = false // True if the next file change is programmatic
+let reevaluateAfterCompletion = false // True if a file change occurred during an active batch
+
+// --- Editing Mode State (controlled by flags in layout.tsx) ---
+let editingModeActive = false // Reflects if we are waiting for isEditing = false
 
 function capitalizeFirstLetter(string) {
   return string.charAt(0).toUpperCase() + string.slice(1)
@@ -39,14 +41,42 @@ async function parseNavigationConfig(filePath) {
       path.basename(filePath),
       fileContent,
       ts.ScriptTarget.ESNext,
-      true
+      true // setParentNodes
     )
 
+    let isAutoSaveOn = false
+    let isEditing = false
     const parsedScreens = []
+
     function visit(node) {
+      if (ts.isVariableStatement(node)) {
+        node.declarationList.declarations.forEach((declaration) => {
+          if (ts.isIdentifier(declaration.name)) {
+            const varName = declaration.name.text
+            if (declaration.initializer) {
+              if (varName === 'isAutoSaveOn' || varName === 'isAutoSaveEnabled') {
+                // Allow both names
+                if (declaration.initializer.kind === ts.SyntaxKind.TrueKeyword) {
+                  isAutoSaveOn = true
+                } else if (declaration.initializer.kind === ts.SyntaxKind.FalseKeyword) {
+                  isAutoSaveOn = false
+                }
+              } else if (varName === 'isEditing') {
+                if (declaration.initializer.kind === ts.SyntaxKind.TrueKeyword) {
+                  isEditing = true
+                } else if (declaration.initializer.kind === ts.SyntaxKind.FalseKeyword) {
+                  isEditing = false
+                }
+              }
+            }
+          }
+        })
+      }
+
       if (ts.isVariableStatement(node)) {
         for (const decl of node.declarationList.declarations) {
           if (decl.name.getText(sourceFile) === 'appNavigationStructure') {
+            // ... (rest of your appNavigationStructure parsing logic - unchanged)
             if (decl.initializer && ts.isArrayLiteralExpression(decl.initializer)) {
               const rootStack = decl.initializer.elements[0]
               if (rootStack && ts.isObjectLiteralExpression(rootStack)) {
@@ -129,7 +159,8 @@ async function parseNavigationConfig(filePath) {
       ts.forEachChild(node, visit)
     }
     visit(sourceFile)
-    return { screens: parsedScreens }
+    // console.log(`Parsed flags: isAutoSaveOn=${isAutoSaveOn}, isEditing=${isEditing}`); // DEBUG
+    return { screens: parsedScreens, isAutoSaveOn, isEditing }
   } catch (error) {
     console.error('Error parsing navigation config:', error.message)
     if (error instanceof SyntaxError || error.message.includes('SyntaxError')) {
@@ -142,48 +173,42 @@ async function parseNavigationConfig(filePath) {
   }
 }
 
-function identifyChanges(currentConfig, previousConfig) {
+function identifyChanges(currentConfigScreens, previousConfigScreens) {
+  // Takes screen arrays directly
   const newScreens = []
   const deletedScreens = []
-  const updatedScreens = [] // For title/componentName changes on the *same* screen name
-  const renamedScreens = [] // For screen *name* changes
+  const updatedScreens = []
+  const renamedScreens = []
 
-  const currentScreenMap = new Map(currentConfig?.screens?.map((s) => [s.name, s]) || [])
-  const previousScreenMap = new Map(previousConfig?.screens?.map((s) => [s.name, s]) || [])
+  const currentScreenMap = new Map(currentConfigScreens?.map((s) => [s.name, s]) || [])
+  const previousScreenMap = new Map(previousConfigScreens?.map((s) => [s.name, s]) || [])
 
   const processedAsRenameNewNames = new Set()
   const processedAsRenameOldNames = new Set()
 
-  // Pass 1: Identify potential renames first
   for (const [prevName, prevScreen] of previousScreenMap) {
     if (!currentScreenMap.has(prevName)) {
-      // Potential deletion or rename source
-      // Try to find a "new" screen in currentConfig with the same componentName
       for (const [currName, currScreen] of currentScreenMap) {
         if (
-          !previousScreenMap.has(currName) && // currScreen is "new"
+          !previousScreenMap.has(currName) &&
           currScreen.componentName === prevScreen.componentName &&
           !processedAsRenameNewNames.has(currName)
         ) {
-          // And not already matched
-
           renamedScreens.push({ oldScreen: prevScreen, newScreen: currScreen })
           processedAsRenameOldNames.add(prevName)
           processedAsRenameNewNames.add(currName)
-          break // Found a rename match for prevScreen
+          break
         }
       }
     }
   }
 
-  // Pass 2: Identify true updates (title/component change for same name)
   for (const [name, currentScreen] of currentScreenMap) {
     if (
       previousScreenMap.has(name) &&
       !processedAsRenameNewNames.has(name) &&
       !processedAsRenameOldNames.has(name)
     ) {
-      // Ensure it wasn't part of a rename (where 'name' itself changed)
       const previousScreen = previousScreenMap.get(name)
       if (
         currentScreen.componentName !== previousScreen.componentName ||
@@ -194,7 +219,6 @@ function identifyChanges(currentConfig, previousConfig) {
     }
   }
 
-  // Pass 3: Identify true new screens
   for (const [name, currentScreen] of currentScreenMap) {
     if (!previousScreenMap.has(name) && !processedAsRenameNewNames.has(name)) {
       if (currentScreen.name && currentScreen.componentName) {
@@ -203,7 +227,6 @@ function identifyChanges(currentConfig, previousConfig) {
     }
   }
 
-  // Pass 4: Identify true deleted screens
   for (const [name, previousScreen] of previousScreenMap) {
     if (!currentScreenMap.has(name) && !processedAsRenameOldNames.has(name)) {
       if (previousScreen.name && previousScreen.componentName) {
@@ -450,7 +473,6 @@ async function removeImportFromNavigationConfig(componentName) {
   }
 }
 
-// --- Renaming Functions ---
 async function renameFeatureDirectory(oldName, newName) {
   const oldPath = path.join(FEATURES_PATH, oldName)
   const newPath = path.join(FEATURES_PATH, newName)
@@ -459,7 +481,7 @@ async function renameFeatureDirectory(oldName, newName) {
       console.warn(
         `Cannot rename feature directory: target ${newPath} already exists. Please resolve manually or allow overwrite if part of content update.`
       )
-      return null // Or prompt to overwrite newPath if it's just a folder
+      return null
     }
     await fs.rename(oldPath, newPath)
     console.log(`Renamed feature directory from ${oldPath} to ${newPath}`)
@@ -501,182 +523,175 @@ async function renameNextPageDirectory(oldName, newName) {
   return null
 }
 
-async function onConfigFileChanged(changedPath) {
-  manualReevaluationScheduledByDecline = false
-
+async function processBatchOfChanges(configToProcessScreens) {
   if (actionInProgress) {
-    console.log('Action already in progress. Will process after current action or on next save.')
+    console.warn(
+      'processBatchOfChanges called while actionInProgress was already true. This is unexpected.'
+    )
     reevaluateAfterCompletion = true
     return
   }
   actionInProgress = true
 
   try {
-    if (changedPath === NAVIGATION_CONFIG_PATH && ignoreNextConfigChange) {
-      ignoreNextConfigChange = false
-      return
-    }
-
-    console.log(`Change detected in ${NAVIGATION_CONFIG_PATH}. Parsing...`)
-    const currentConfig = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
-
-    if (!currentConfig) {
-      console.warn('Could not parse navigation config. Waiting for next valid change.')
-      return
-    }
-
     const { newScreens, deletedScreens, updatedScreens, renamedScreens } = identifyChanges(
-      currentConfig,
-      lastAcknowledgedConfigState
+      configToProcessScreens, // Now passing the array directly
+      lastAcknowledgedConfigState?.screens // Accessing the .screens property
     )
 
-    let changesMadeInThisRun = false
+    const hasAnyChanges =
+      newScreens.length > 0 ||
+      deletedScreens.length > 0 ||
+      updatedScreens.length > 0 ||
+      renamedScreens.length > 0
+
+    if (!hasAnyChanges) {
+      console.log('No actionable screen changes to process relative to last acknowledged state.')
+      lastAcknowledgedConfigState = { screens: configToProcessScreens }
+      return
+    }
+
+    let promptMessage = 'The following changes are detected based on your latest edits:\n'
+    if (deletedScreens.length > 0)
+      promptMessage += `  - DELETIONS: ${deletedScreens.map((s) => s.name).join(', ')}\n`
+    if (renamedScreens.length > 0)
+      promptMessage += `  - RENAMES: ${renamedScreens.map((r) => `'${r.oldScreen.name}' to '${r.newScreen.name}'`).join(', ')}\n`
+    if (updatedScreens.length > 0)
+      promptMessage += `  - UPDATES (title/component): ${updatedScreens.map((u) => u.newScreen.name).join(', ')}\n`
+    if (newScreens.length > 0)
+      promptMessage += `  - ADDITIONS: ${newScreens.map((s) => s.name).join(', ')}\n`
+    promptMessage += 'Do you want to proceed with these changes now?'
+
+    const { confirmProcessNow } = await inquirer.default.prompt([
+      { type: 'confirm', name: 'confirmProcessNow', message: promptMessage, default: true },
+    ])
+
+    if (!confirmProcessNow) {
+      console.log(
+        'User chose not to process accumulated changes now. Edits remain, will re-evaluate on next save if isEditing becomes false or autosave is off.'
+      )
+      return
+    }
+
+    let changesEffectivelyMade = false
 
     // --- Handle Deletions ---
     if (deletedScreens.length > 0) {
-      console.log(
-        `Detected ${deletedScreens.length} screen(s) for DELETION:`,
-        deletedScreens.map((s) => s.name).join(', ')
-      )
-      const { confirmProcessDeletions } = await inquirer.default.prompt([
-        {
-          type: 'confirm',
-          name: 'confirmProcessDeletions',
-          message: `The following screen(s) seem to be removed from config: ${deletedScreens.map((s) => s.name).join(', ')}. Delete associated files?`,
-          default: false,
-        },
-      ])
-      if (confirmProcessDeletions) {
-        // ... (Git check logic) ...
-        const deletedFilePaths = []
-        let allDeletionOpsConfirmed = true
-        for (const screen of deletedScreens) {
-          console.log(
-            `\nProcessing DELETION for screen: ${screen.name} (Component: ${screen.componentName})`
-          )
-          const deletionOps = [
-            {
-              name: `Delete feature for ${screen.name}`,
-              action: async () => {
-                const p = await deleteFeature(screen.name)
-                if (p) deletedFilePaths.push(p)
-              },
+      const otherUncommittedChangesDel = await checkUncommittedChanges()
+      if (otherUncommittedChangesDel.length > 0) {
+        /* Git check */
+      }
+
+      const deletedFilePaths = []
+      let allDeletionOpsConfirmed = true
+      for (const screen of deletedScreens) {
+        console.log(
+          `\nProcessing DELETION for screen: ${screen.name} (Component: ${screen.componentName})`
+        )
+        const deletionOps = [
+          {
+            name: `Delete feature for ${screen.name}`,
+            action: async () => {
+              const p = await deleteFeature(screen.name)
+              if (p) deletedFilePaths.push(p)
             },
-            {
-              name: `Delete Expo tab file for ${screen.name}`,
-              action: async () => {
-                const p = await deleteExpoTabFile(screen.name)
-                if (p) deletedFilePaths.push(p)
-              },
+          },
+          {
+            name: `Delete Expo tab file for ${screen.name}`,
+            action: async () => {
+              const p = await deleteExpoTabFile(screen.name)
+              if (p) deletedFilePaths.push(p)
             },
-            {
-              name: `Delete Next.js page for ${screen.name}`,
-              action: async () => {
-                const p = await deleteNextPage(screen.name)
-                if (p) deletedFilePaths.push(p)
-              },
+          },
+          {
+            name: `Delete Next.js page for ${screen.name}`,
+            action: async () => {
+              const p = await deleteNextPage(screen.name)
+              if (p) deletedFilePaths.push(p)
             },
+          },
+          {
+            name: `Remove import for ${screen.componentName} from config`,
+            action: () => removeImportFromNavigationConfig(screen.componentName),
+          },
+        ]
+        for (const op of deletionOps) {
+          const { confirmOp } = await inquirer.default.prompt([
             {
-              name: `Remove import for ${screen.componentName} from config`,
-              action: () => removeImportFromNavigationConfig(screen.componentName),
+              type: 'confirm',
+              name: 'confirmOp',
+              message: `Confirm DELETION: ${op.name}?`,
+              default: true,
             },
-          ]
-          for (const op of deletionOps) {
-            /* ... (op confirmation loop) ... */
-            const { confirmOp } = await inquirer.default.prompt([
-              {
-                type: 'confirm',
-                name: 'confirmOp',
-                message: `Confirm DELETION: ${op.name}?`,
-                default: true,
-              },
-            ])
-            if (!confirmOp) {
-              allDeletionOpsConfirmed = false
-              console.log(`Operation "${op.name}" cancelled.`)
-              break
-            }
-            try {
-              await op.action()
-              changesMadeInThisRun = true
-            } catch (error) {
-              console.error(`Error during "${op.name}":`, error)
-              allDeletionOpsConfirmed = false
-              break
-            }
+          ])
+          if (!confirmOp) {
+            allDeletionOpsConfirmed = false
+            console.log(`Operation "${op.name}" cancelled.`)
+            break
           }
-          if (!allDeletionOpsConfirmed) break
+          try {
+            await op.action()
+            changesEffectivelyMade = true
+          } catch (error) {
+            console.error(`Error during "${op.name}":`, error)
+            allDeletionOpsConfirmed = false
+            break
+          }
         }
-        if (allDeletionOpsConfirmed && (deletedFilePaths.length > 0 || ignoreNextConfigChange)) {
-          /* ... (commit logic) ... */ lastAcknowledgedConfigState = currentConfig
-        } else if (!allDeletionOpsConfirmed) {
-          console.log('Deletion process cancelled.')
-          return
-        } else {
-          console.log('No files actually deleted.')
-          lastAcknowledgedConfigState = currentConfig
+        if (!allDeletionOpsConfirmed) break
+      }
+      if (allDeletionOpsConfirmed && (deletedFilePaths.length > 0 || ignoreNextConfigChange)) {
+        console.log('\nDeletion process completed for this batch!')
+        const { confirmCommitDeletions } = await inquirer.default.prompt([
+          {
+            type: 'confirm',
+            name: 'confirmCommitDeletions',
+            message: 'Commit these deletions?',
+            default: true,
+          },
+        ])
+        if (confirmCommitDeletions) {
+          /* Commit logic */
         }
-      } else {
-        console.log('User chose not to process deletions. Scheduling re-evaluation.')
-        manualReevaluationScheduledByDecline = true
-        setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
+      } else if (!allDeletionOpsConfirmed) {
+        console.log('Deletion process cancelled.')
         return
+      } else {
+        console.log('No files actually deleted for deletion batch.')
       }
     }
 
     // --- Handle Renames ---
     if (renamedScreens.length > 0) {
-      console.log(`Detected ${renamedScreens.length} screen(s) for RENAME:`)
-      renamedScreens.forEach((r) =>
-        console.log(
-          `  - '${r.oldScreen.name}' (component ${r.oldScreen.componentName}) to '${r.newScreen.name}' (component ${r.newScreen.componentName})`
-        )
-      )
+      const otherUncommittedChangesRen = await checkUncommittedChanges()
+      if (otherUncommittedChangesRen.length > 0) {
+        /* Git check */
+      }
 
-      const { confirmProcessRenames } = await inquirer.default.prompt([
-        {
-          type: 'confirm',
-          name: 'confirmProcessRenames',
-          message: `The above screen(s) appear to be renamed. Proceed with renaming files/folders and updating content?`,
-          default: true,
-        },
-      ])
-
-      if (confirmProcessRenames) {
-        // ... (Git check logic) ...
-        const renamedOrUpdatedFilePaths = []
-        let allRenameOpsConfirmed = true
-
-        for (const { oldScreen, newScreen } of renamedScreens) {
-          console.log(`\nProcessing RENAME for '${oldScreen.name}' to '${newScreen.name}'`)
-          const renameOps = []
-
-          // 1. Rename files/folders
-          renameOps.push({
+      const renamedOrUpdatedFilePaths = []
+      let allRenameOpsConfirmed = true
+      for (const { oldScreen, newScreen } of renamedScreens) {
+        console.log(`\nProcessing RENAME for '${oldScreen.name}' to '${newScreen.name}'`)
+        const renameOps = [
+          {
             name: `Rename feature directory for '${oldScreen.name}' to '${newScreen.name}'`,
             action: async () => {
-              await renameFeatureDirectory(
-                oldScreen.name,
-                newScreen.name
-              ) /* Path not added, as it's a move */
+              await renameFeatureDirectory(oldScreen.name, newScreen.name)
             },
-          })
-          renameOps.push({
+          },
+          {
             name: `Rename Expo tab file for '${oldScreen.name}' to '${newScreen.name}'`,
             action: async () => {
               await renameExpoTabFile(oldScreen.name, newScreen.name)
             },
-          })
-          renameOps.push({
+          },
+          {
             name: `Rename Next.js page directory for '${oldScreen.name}' to '${newScreen.name}'`,
             action: async () => {
               await renameNextPageDirectory(oldScreen.name, newScreen.name)
             },
-          })
-
-          // 2. Regenerate/Update content in the *newly named* files
-          // These will use the newScreen.name, newScreen.componentName, newScreen.title
-          renameOps.push({
+          },
+          {
             name: `Update/regenerate feature screen content for '${newScreen.name}'`,
             action: async () => {
               const p = await generateFeatureScreen(
@@ -687,322 +702,351 @@ async function onConfigFileChanged(changedPath) {
               )
               if (p) renamedOrUpdatedFilePaths.push(p)
             },
-          })
-          renameOps.push({
+          },
+          {
             name: `Update/regenerate Expo tab file content for '${newScreen.name}'`,
             action: async () => {
               const p = await generateExpoTabFile(newScreen.name, newScreen.componentName, true)
               if (p) renamedOrUpdatedFilePaths.push(p)
             },
-          })
-          renameOps.push({
+          },
+          {
             name: `Update/regenerate Next.js page file content for '${newScreen.name}'`,
             action: async () => {
               const p = await generateNextPageFile(newScreen.name, newScreen.componentName, true)
               if (p) renamedOrUpdatedFilePaths.push(p)
             },
+          },
+        ]
+        if (oldScreen.componentName !== newScreen.componentName) {
+          renameOps.push({
+            name: `Remove old import for ${oldScreen.componentName}`,
+            action: () => removeImportFromNavigationConfig(oldScreen.componentName),
           })
-
-          // 3. Handle imports if componentName changed (less common for pure rename, but possible)
-          if (oldScreen.componentName !== newScreen.componentName) {
-            renameOps.push({
-              name: `Remove old import for ${oldScreen.componentName}`,
-              action: () => removeImportFromNavigationConfig(oldScreen.componentName),
-            })
-            renameOps.push({
-              name: `Add new import for ${newScreen.componentName}`,
-              action: () => addImportToNavigationConfig(newScreen.componentName, newScreen.name),
-            })
-          }
-          // If only name changed, existing import for oldScreen.componentName is fine as it points to the component, not the file path.
-
-          for (const op of renameOps) {
-            const { confirmOp } = await inquirer.default.prompt([
-              {
-                type: 'confirm',
-                name: 'confirmOp',
-                message: `Confirm RENAME action: ${op.name}?`,
-                default: true,
-              },
-            ])
-            if (!confirmOp) {
-              allRenameOpsConfirmed = false
-              console.log(`Operation "${op.name}" cancelled.`)
-              break
-            }
-            try {
-              await op.action()
-              changesMadeInThisRun = true
-            } catch (error) {
-              console.error(`Error during "${op.name}":`, error)
-              allRenameOpsConfirmed = false
-              break
-            }
-          }
-          if (!allRenameOpsConfirmed) break
+          renameOps.push({
+            name: `Add new import for ${newScreen.componentName}`,
+            action: () => addImportToNavigationConfig(newScreen.componentName, newScreen.name),
+          })
         }
-
-        if (
-          allRenameOpsConfirmed &&
-          (renamedOrUpdatedFilePaths.length > 0 || ignoreNextConfigChange)
-        ) {
-          console.log('\nRename process completed!')
-          // ... (Commit logic) ...
-          lastAcknowledgedConfigState = currentConfig
-        } else if (!allRenameOpsConfirmed) {
-          console.log('Rename process cancelled. Manual cleanup might be needed.')
-          return
-        } else {
-          console.log(
-            "No files were actually renamed/updated (e.g., targets didn't exist or overwrites skipped)."
-          )
-          lastAcknowledgedConfigState = currentConfig
+        for (const op of renameOps) {
+          const { confirmOp } = await inquirer.default.prompt([
+            {
+              type: 'confirm',
+              name: 'confirmOp',
+              message: `Confirm RENAME action: ${op.name}?`,
+              default: true,
+            },
+          ])
+          if (!confirmOp) {
+            allRenameOpsConfirmed = false
+            console.log(`Operation "${op.name}" cancelled.`)
+            break
+          }
+          try {
+            await op.action()
+            changesEffectivelyMade = true
+          } catch (error) {
+            console.error(`Error during "${op.name}":`, error)
+            allRenameOpsConfirmed = false
+            break
+          }
         }
-      } else {
-        console.log('User chose not to process renames now. Scheduling re-evaluation.')
-        manualReevaluationScheduledByDecline = true
-        setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
+        if (!allRenameOpsConfirmed) break
+      }
+      if (
+        allRenameOpsConfirmed &&
+        (renamedOrUpdatedFilePaths.length > 0 || ignoreNextConfigChange)
+      ) {
+        console.log('\nRename process completed!')
+        const { confirmCommitRenames } = await inquirer.default.prompt([
+          {
+            type: 'confirm',
+            name: 'confirmCommitRenames',
+            message: 'Commit these renames/updates?',
+            default: true,
+          },
+        ])
+        if (confirmCommitRenames) {
+          /* Commit logic */
+        }
+      } else if (!allRenameOpsConfirmed) {
+        console.log('Rename process cancelled.')
         return
+      } else {
+        console.log('No files actually renamed/updated for rename batch.')
       }
     }
 
     // --- Handle Updates (title/componentName changes for same screen name) ---
     if (updatedScreens.length > 0) {
-      console.log(
-        `Detected ${updatedScreens.length} screen(s) for UPDATE (title/component):`,
-        updatedScreens
-          .map(
-            (s) =>
-              `${s.newScreen.name} (Old component: ${s.oldScreen.componentName}, New: ${s.newScreen.componentName}; Old title: ${s.oldScreen.title}, New: ${s.newScreen.title})`
-          )
-          .join('\n')
-      )
-      const { confirmProcessUpdates } = await inquirer.default.prompt([
-        {
-          type: 'confirm',
-          name: 'confirmProcessUpdates',
-          message: `The above screen(s) have updates in the config. Update associated files?`,
-          default: true,
-        },
-      ])
-      if (confirmProcessUpdates) {
-        // ... (Git check logic) ...
-        const updatedFilePaths = []
-        let allUpdateOpsConfirmed = true
-        for (const { oldScreen, newScreen } of updatedScreens) {
-          console.log(`\nProcessing UPDATE for screen: ${newScreen.name}`)
-          const updateOps = [
-            {
-              name: `Update feature screen for ${newScreen.name}`,
-              action: async () => {
-                const p = await generateFeatureScreen(
-                  newScreen.name,
-                  newScreen.componentName,
-                  newScreen.title || newScreen.name,
-                  true
-                )
-                if (p) updatedFilePaths.push(p)
-              },
+      const otherUncommittedChangesUpd = await checkUncommittedChanges()
+      if (otherUncommittedChangesUpd.length > 0) {
+        /* Git check */
+      }
+
+      const updatedFilePaths = []
+      let allUpdateOpsConfirmed = true
+      for (const { oldScreen, newScreen } of updatedScreens) {
+        console.log(`\nProcessing UPDATE for screen: ${newScreen.name}`)
+        const updateOps = [
+          {
+            name: `Update feature screen for ${newScreen.name}`,
+            action: async () => {
+              const p = await generateFeatureScreen(
+                newScreen.name,
+                newScreen.componentName,
+                newScreen.title || newScreen.name,
+                true
+              )
+              if (p) updatedFilePaths.push(p)
             },
-            {
-              name: `Update Expo tab file for ${newScreen.name}`,
-              action: async () => {
-                const p = await generateExpoTabFile(newScreen.name, newScreen.componentName, true)
-                if (p) updatedFilePaths.push(p)
-              },
+          },
+          {
+            name: `Update Expo tab file for ${newScreen.name}`,
+            action: async () => {
+              const p = await generateExpoTabFile(newScreen.name, newScreen.componentName, true)
+              if (p) updatedFilePaths.push(p)
             },
-            {
-              name: `Update Next.js page file for ${newScreen.name}`,
-              action: async () => {
-                const p = await generateNextPageFile(newScreen.name, newScreen.componentName, true)
-                if (p) updatedFilePaths.push(p)
-              },
+          },
+          {
+            name: `Update Next.js page file for ${newScreen.name}`,
+            action: async () => {
+              const p = await generateNextPageFile(newScreen.name, newScreen.componentName, true)
+              if (p) updatedFilePaths.push(p)
             },
-          ]
-          if (oldScreen.componentName !== newScreen.componentName) {
-            updateOps.push({
-              name: `Remove old import for ${oldScreen.componentName}`,
-              action: () => removeImportFromNavigationConfig(oldScreen.componentName),
-            })
-            updateOps.push({
-              name: `Add new import for ${newScreen.componentName}`,
-              action: () => addImportToNavigationConfig(newScreen.componentName, newScreen.name),
-            })
-          }
-          for (const op of updateOps) {
-            /* ... (op confirmation loop) ... */
-            const { confirmOp } = await inquirer.default.prompt([
-              {
-                type: 'confirm',
-                name: 'confirmOp',
-                message: `Confirm UPDATE: ${op.name}?`,
-                default: true,
-              },
-            ])
-            if (!confirmOp) {
-              allUpdateOpsConfirmed = false
-              console.log(`Operation "${op.name}" cancelled.`)
-              break
-            }
-            try {
-              await op.action()
-              changesMadeInThisRun = true
-            } catch (error) {
-              console.error(`Error during "${op.name}":`, error)
-              allUpdateOpsConfirmed = false
-              break
-            }
-          }
-          if (!allUpdateOpsConfirmed) break
+          },
+        ]
+        if (oldScreen.componentName !== newScreen.componentName) {
+          updateOps.push({
+            name: `Remove old import for ${oldScreen.componentName}`,
+            action: () => removeImportFromNavigationConfig(oldScreen.componentName),
+          })
+          updateOps.push({
+            name: `Add new import for ${newScreen.componentName}`,
+            action: () => addImportToNavigationConfig(newScreen.componentName, newScreen.name),
+          })
         }
-        if (allUpdateOpsConfirmed && (updatedFilePaths.length > 0 || ignoreNextConfigChange)) {
-          /* ... (commit logic) ... */ lastAcknowledgedConfigState = currentConfig
-        } else if (!allUpdateOpsConfirmed) {
-          console.log('Update process cancelled.')
-          return
-        } else {
-          console.log('No files actually updated.')
-          lastAcknowledgedConfigState = currentConfig
+        for (const op of updateOps) {
+          const { confirmOp } = await inquirer.default.prompt([
+            {
+              type: 'confirm',
+              name: 'confirmOp',
+              message: `Confirm UPDATE: ${op.name}?`,
+              default: true,
+            },
+          ])
+          if (!confirmOp) {
+            allUpdateOpsConfirmed = false
+            console.log(`Operation "${op.name}" cancelled.`)
+            break
+          }
+          try {
+            await op.action()
+            changesEffectivelyMade = true
+          } catch (error) {
+            console.error(`Error during "${op.name}":`, error)
+            allUpdateOpsConfirmed = false
+            break
+          }
         }
-      } else {
-        console.log('User chose not to process updates. Scheduling re-evaluation.')
-        manualReevaluationScheduledByDecline = true
-        setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
+        if (!allUpdateOpsConfirmed) break
+      }
+      if (allUpdateOpsConfirmed && (updatedFilePaths.length > 0 || ignoreNextConfigChange)) {
+        console.log('\nUpdate process completed!')
+        const { confirmCommitUpdates } = await inquirer.default.prompt([
+          {
+            type: 'confirm',
+            name: 'confirmCommitUpdates',
+            message: 'Commit these updates?',
+            default: true,
+          },
+        ])
+        if (confirmCommitUpdates) {
+          /* Commit logic */
+        }
+      } else if (!allUpdateOpsConfirmed) {
+        console.log('Update process cancelled.')
         return
+      } else {
+        console.log('No files actually updated for update batch.')
       }
     }
 
     // --- Handle Additions ---
     if (newScreens.length > 0) {
-      console.log(
-        `Detected ${newScreens.length} screen(s) for ADDITION:`,
-        newScreens.map((s) => s.name).join(', ')
-      )
-      const { confirmProcessAdditions } = await inquirer.default.prompt([
-        {
-          type: 'confirm',
-          name: 'confirmProcessAdditions',
-          message: `The following new screen(s) were detected: ${newScreens.map((s) => s.name).join(', ')}. Generate files for them?`,
-          default: true,
-        },
-      ])
-      if (confirmProcessAdditions) {
-        // ... (Git check logic) ...
-        const generatedFilePaths = []
-        let allAdditionOpsConfirmed = true
-        for (const screen of newScreens) {
-          console.log(`\nProcessing ADDITION for screen: ${screen.name}`)
-          const additionOps = [
-            {
-              name: `Generate feature screen for ${screen.name}`,
-              action: async () => {
-                const p = await generateFeatureScreen(
-                  screen.name,
-                  screen.componentName,
-                  screen.title || screen.name
-                )
-                if (p) generatedFilePaths.push(p)
-              },
+      const otherUncommittedChangesAdd = await checkUncommittedChanges()
+      if (otherUncommittedChangesAdd.length > 0) {
+        /* Git check */
+      }
+
+      const generatedFilePaths = []
+      let allAdditionOpsConfirmed = true
+      for (const screen of newScreens) {
+        console.log(`\nProcessing ADDITION for screen: ${screen.name}`)
+        const additionOps = [
+          {
+            name: `Generate feature screen for ${screen.name}`,
+            action: async () => {
+              const p = await generateFeatureScreen(
+                screen.name,
+                screen.componentName,
+                screen.title || screen.name
+              )
+              if (p) generatedFilePaths.push(p)
             },
-            {
-              name: `Generate Expo tab file for ${screen.name}`,
-              action: async () => {
-                const p = await generateExpoTabFile(screen.name, screen.componentName)
-                if (p) generatedFilePaths.push(p)
-              },
+          },
+          {
+            name: `Generate Expo tab file for ${screen.name}`,
+            action: async () => {
+              const p = await generateExpoTabFile(screen.name, screen.componentName)
+              if (p) generatedFilePaths.push(p)
             },
-            {
-              name: `Generate Next.js page file for ${screen.name}`,
-              action: async () => {
-                const p = await generateNextPageFile(screen.name, screen.componentName)
-                if (p) generatedFilePaths.push(p)
-              },
+          },
+          {
+            name: `Generate Next.js page file for ${screen.name}`,
+            action: async () => {
+              const p = await generateNextPageFile(screen.name, screen.componentName)
+              if (p) generatedFilePaths.push(p)
             },
+          },
+          {
+            name: `Add import for ${screen.componentName} to config`,
+            action: () => addImportToNavigationConfig(screen.componentName, screen.name),
+          },
+        ]
+        for (const op of additionOps) {
+          const { confirmOp } = await inquirer.default.prompt([
             {
-              name: `Add import for ${screen.componentName} to config`,
-              action: () => addImportToNavigationConfig(screen.componentName, screen.name),
+              type: 'confirm',
+              name: 'confirmOp',
+              message: `Confirm ADDITION: ${op.name}?`,
+              default: true,
             },
-          ]
-          for (const op of additionOps) {
-            /* ... (op confirmation loop) ... */
-            const { confirmOp } = await inquirer.default.prompt([
-              {
-                type: 'confirm',
-                name: 'confirmOp',
-                message: `Confirm ADDITION: ${op.name}?`,
-                default: true,
-              },
-            ])
-            if (!confirmOp) {
-              allAdditionOpsConfirmed = false
-              console.log(`Operation "${op.name}" cancelled.`)
-              break
-            }
-            try {
-              await op.action()
-              changesMadeInThisRun = true
-            } catch (error) {
-              console.error(`Error during "${op.name}":`, error)
-              allAdditionOpsConfirmed = false
-              break
-            }
+          ])
+          if (!confirmOp) {
+            allAdditionOpsConfirmed = false
+            console.log(`Operation "${op.name}" cancelled.`)
+            break
           }
-          if (!allAdditionOpsConfirmed) break
-        }
-        if (!allAdditionOpsConfirmed) {
-          if (generatedFilePaths.length > 0) {
-            /* ... undo logic ... */
+          try {
+            await op.action()
+            changesEffectivelyMade = true
+          } catch (error) {
+            console.error(`Error during "${op.name}":`, error)
+            allAdditionOpsConfirmed = false
+            break
           }
-          console.log('Addition process cancelled.')
-          return
         }
-        if (generatedFilePaths.length > 0 || ignoreNextConfigChange) {
-          /* ... (commit logic) ... */ lastAcknowledgedConfigState = currentConfig
-        } else if (allAdditionOpsConfirmed) {
-          console.log('\nNo new files were generated for additions.')
-          lastAcknowledgedConfigState = currentConfig
+        if (!allAdditionOpsConfirmed) break
+      }
+      if (!allAdditionOpsConfirmed) {
+        if (generatedFilePaths.length > 0) {
+          /* ... undo logic ... */
         }
-      } else {
-        console.log('User chose not to process additions. Scheduling re-evaluation.')
-        manualReevaluationScheduledByDecline = true
-        setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
+        console.log('Addition process cancelled.')
         return
+      }
+      if (generatedFilePaths.length > 0 || ignoreNextConfigChange) {
+        console.log('\nFile generation/update process for additions completed!')
+        const { confirmAllWork } = await inquirer.default.prompt([
+          {
+            type: 'confirm',
+            name: 'confirmAllWork',
+            message: 'All attempted changes for additions are done. Do they work as expected?',
+            default: true,
+          },
+        ])
+        if (confirmAllWork) {
+          const { shouldCommitNew } = await inquirer.default.prompt([
+            {
+              type: 'confirm',
+              name: 'shouldCommitNew',
+              message: 'Commit these addition changes?',
+              default: true,
+            },
+          ])
+          if (shouldCommitNew) {
+            /* Commit logic */
+          }
+        }
+      } else if (allAdditionOpsConfirmed) {
+        console.log('\nNo new files were generated for additions.')
       }
     }
 
-    if (
-      newScreens.length === 0 &&
-      deletedScreens.length === 0 &&
-      updatedScreens.length === 0 &&
-      renamedScreens.length === 0
-    ) {
+    if (changesEffectivelyMade || hasAnyChanges) {
+      lastAcknowledgedConfigState = { screens: configToProcessScreens }
       console.log(
-        'No actionable changes (new/deleted/updated/renamed screens) detected relative to the last acknowledged state.'
-      )
-      lastAcknowledgedConfigState = currentConfig
-    } else if (
-      !changesMadeInThisRun &&
-      (newScreens.length > 0 ||
-        deletedScreens.length > 0 ||
-        updatedScreens.length > 0 ||
-        renamedScreens.length > 0)
-    ) {
-      console.log(
-        'Detected changes were presented, but no file operations were performed by user choice.'
+        "Snapshot `lastAcknowledgedConfigState` updated to current processed config's screens."
       )
     }
-
-    console.log('Processing cycle completed.')
   } catch (error) {
-    console.error('An error occurred during the main processing sequence:', error)
+    console.error('An error occurred during processBatchOfChanges:', error)
   } finally {
     actionInProgress = false
-    if (reevaluateAfterCompletion && !manualReevaluationScheduledByDecline) {
+    if (reevaluateAfterCompletion) {
       reevaluateAfterCompletion = false
-      console.log('Re-evaluating config due to changes during an active operation...')
+      console.log('Re-evaluating config due to changes during the batch operation...')
       setImmediate(() => onConfigFileChanged(NAVIGATION_CONFIG_PATH))
     }
   }
+}
+
+async function onConfigFileChanged(changedPath) {
+  if (actionInProgress) {
+    console.log(
+      'An operation batch is already in progress. Queuing re-evaluation for after completion...'
+    )
+    reevaluateAfterCompletion = true
+    return
+  }
+
+  if (changedPath === NAVIGATION_CONFIG_PATH && ignoreNextConfigChange) {
+    ignoreNextConfigChange = false
+    return
+  }
+
+  console.log(`Change detected in ${NAVIGATION_CONFIG_PATH}. Parsing...`)
+  const parsedResult = await parseNavigationConfig(NAVIGATION_CONFIG_PATH)
+
+  if (!parsedResult) {
+    console.warn('Could not parse navigation config. Waiting for next valid change.')
+    editingModeActive = false
+    return
+  }
+
+  const { screens: currentScreensFromFile, isAutoSaveOn, isEditing } = parsedResult
+  console.log(`Parsed flags from file: isAutoSaveOn=${isAutoSaveOn}, isEditing=${isEditing}`)
+
+  if (isAutoSaveOn) {
+    if (isEditing) {
+      if (!editingModeActive) {
+        console.log(
+          'Autosave ON and `isEditing` is true. Entering editing mode. Waiting for `isEditing` to become false in layout.tsx to process changes.'
+        )
+        editingModeActive = true
+      } else {
+        console.log(
+          'Autosave ON and `isEditing` is true. Still in editing mode, waiting for `isEditing` to become false.'
+        )
+      }
+      return
+    } else {
+      if (editingModeActive) {
+        console.log('`isEditing` is now false. Proceeding to process accumulated changes.')
+        editingModeActive = false
+      } else {
+        console.log('Autosave ON, `isEditing` is false. Proceeding to check for changes.')
+      }
+    }
+  } else {
+    if (editingModeActive) {
+      console.log('Autosave turned OFF. Exiting editing mode and processing changes.')
+      editingModeActive = false
+    }
+  }
+
+  await processBatchOfChanges(currentScreensFromFile)
 }
 
 console.log(`Watching for changes in ${NAVIGATION_CONFIG_PATH}...`)
@@ -1010,7 +1054,7 @@ const watcher = chokidar.watch(NAVIGATION_CONFIG_PATH, {
   persistent: true,
   ignoreInitial: true,
   awaitWriteFinish: {
-    stabilityThreshold: 1500,
+    stabilityThreshold: 1000,
     pollInterval: 100,
   },
 })
@@ -1020,13 +1064,26 @@ watcher.on('error', (error) => console.error(`Watcher error: ${error}`))
 
 parseNavigationConfig(NAVIGATION_CONFIG_PATH)
   .then((config) => {
-    if (config) {
-      lastAcknowledgedConfigState = config
-      console.log('Initial navigation config parsed and stored.')
+    if (config && config.screens) {
+      lastAcknowledgedConfigState = { screens: config.screens }
+      console.log('Initial navigation config (screens part) parsed and stored.')
+      console.log(
+        `Initial flags: isAutoSaveOn=${config.isAutoSaveOn}, isEditing=${config.isEditing}`
+      )
+      if (config.isAutoSaveOn && config.isEditing) {
+        editingModeActive = true
+        console.log('Started in editing mode due to initial flags in config file.')
+      }
     } else {
-      console.error('Failed to parse initial config on startup. Please check the file.')
+      console.error(
+        'Failed to parse initial config on startup or config.screens is missing. Please check the file.'
+      )
+      lastAcknowledgedConfigState = { screens: [] }
     }
   })
-  .catch((err) => console.error('Error during initial config parse:', err))
+  .catch((err) => {
+    console.error('Error during initial config parse:', err)
+    lastAcknowledgedConfigState = { screens: [] }
+  })
 
 console.log('CLI tool started. Press Ctrl+C to exit.')

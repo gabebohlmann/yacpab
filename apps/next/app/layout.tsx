@@ -21,7 +21,7 @@ import {
   TabNavigatorLayoutConfig,
   ScreenConfig,
 } from 'app/features/navigation/layout'
-import TabsLayout from './(tabs)/layout' // This assumes Next.js resolves this path to the tabs layout component
+import TabsLayout from './(drawer)/(tabs)/layout' // This assumes Next.js resolves this path to the tabs layout component
 
 const Stack = createNativeStackNavigator()
 
